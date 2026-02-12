@@ -1,26 +1,162 @@
 @import "tailwindcss";
 
+/* --- shadcn-compatible tokens --- */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: 0 0% 100%;
+  --foreground: 222.2 84% 4.9%;
+
+  --card: 0 0% 100%;
+  --card-foreground: 222.2 84% 4.9%;
+
+  --popover: 0 0% 100%;
+  --popover-foreground: 222.2 84% 4.9%;
+
+  --primary: 222.2 47.4% 11.2%;
+  --primary-foreground: 210 40% 98%;
+
+  --secondary: 210 40% 96.1%;
+  --secondary-foreground: 222.2 47.4% 11.2%;
+
+  --muted: 210 40% 96.1%;
+  --muted-foreground: 215.4 16.3% 46.9%;
+
+  --accent: 210 40% 96.1%;
+  --accent-foreground: 222.2 47.4% 11.2%;
+
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 210 40% 98%;
+
+  --border: 214.3 31.8% 91.4%;
+  --input: 214.3 31.8% 91.4%;
+  --ring: 271 91% 65%;
+
+  --radius: 1rem;
+
+  /* Brand accents (Gift-of-Dream vibe) */
+  --accent-purple: 262.1 83.3% 57.8%;
+  --accent-violet: 271 91% 65%;
+  --accent-orange: 38 92% 50%;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+.dark {
+  --background: 222.2 84% 4.9%;
+  --foreground: 210 40% 98%;
+
+  --card: 222.2 84% 6.5%;
+  --card-foreground: 210 40% 98%;
+
+  --popover: 222.2 84% 6.5%;
+  --popover-foreground: 210 40% 98%;
+
+  --primary: 210 40% 98%;
+  --primary-foreground: 222.2 47.4% 11.2%;
+
+  --secondary: 217.2 32.6% 17.5%;
+  --secondary-foreground: 210 40% 98%;
+
+  --muted: 217.2 32.6% 17.5%;
+  --muted-foreground: 215 20.2% 65.1%;
+
+  --accent: 217.2 32.6% 17.5%;
+  --accent-foreground: 210 40% 98%;
+
+  --destructive: 0 62.8% 45%;
+  --destructive-foreground: 210 40% 98%;
+
+  --border: 217.2 32.6% 17.5%;
+  --input: 217.2 32.6% 17.5%;
+  --ring: 271 91% 65%;
+
+  --accent-purple: 262.1 83.3% 57.8%;
+  --accent-violet: 271 91% 65%;
+  --accent-orange: 38 92% 50%;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html,
+body {
+  height: 100%;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+/* consistent border color */
+*,
+::before,
+::after {
+  border-color: hsl(var(--border));
+}
+
+/* --- Premium background canvas used across pages --- */
+.app-canvas {
+  position: relative;
+  isolation: isolate;
+}
+
+.app-canvas::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  background:
+    radial-gradient(1000px 600px at 15% 15%, hsl(var(--accent-violet) / 0.22), transparent 60%),
+    radial-gradient(900px 500px at 85% 25%, hsl(var(--accent-orange) / 0.14), transparent 55%),
+    radial-gradient(1000px 700px at 60% 90%, hsl(var(--accent-purple) / 0.12), transparent 60%),
+    linear-gradient(180deg, transparent, hsl(var(--background) / 0.55));
+  pointer-events: none;
+}
+
+/* Glass surfaces */
+.glass {
+  background: hsl(var(--background) / 0.10);
+  border: 1px solid hsl(var(--foreground) / 0.10);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.glass-soft {
+  background: hsl(var(--background) / 0.08);
+  border: 1px solid hsl(var(--foreground) / 0.10);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+/* Smooth hover lift */
+.lift {
+  transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+}
+
+.lift:hover {
+  transform: translateY(-2px);
+}
+
+/* Gradient text */
+.gradient-text {
+  background: linear-gradient(
+    90deg,
+    hsl(var(--accent-orange)),
+    hsl(var(--accent-violet)),
+    hsl(var(--accent-purple))
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Fancy divider wave */
+.wave-divider {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 110px;
+  pointer-events: none;
+  opacity: 0.95;
+  background:
+    radial-gradient(120% 160% at 0% 100%, hsl(var(--accent-violet) / 0.35), transparent 55%),
+    radial-gradient(120% 160% at 100% 100%, hsl(var(--accent-purple) / 0.25), transparent 55%),
+    linear-gradient(180deg, transparent, hsl(var(--background) / 0.85));
+  mask-image: radial-gradient(120% 120% at 50% 0%, black 45%, transparent 72%);
 }
