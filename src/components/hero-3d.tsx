@@ -7,8 +7,8 @@ export default function Hero3D() {
 
   // Autospin + premium hover tilt
   useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
+    const node = ref.current;
+    if (!node) return;
 
     const prefersReduced =
       typeof window !== "undefined" &&
@@ -28,6 +28,9 @@ export default function Hero3D() {
     let last = performance.now();
 
     function animate(now: number) {
+      const el = ref.current;
+      if (!el) return; // ✅ prevents null access if unmounted
+
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
 
@@ -56,6 +59,9 @@ export default function Hero3D() {
     }
 
     function onMove(e: MouseEvent) {
+      const el = ref.current;
+      if (!el) return;
+
       const r = el.getBoundingClientRect();
       const px = (e.clientX - r.left) / r.width;
       const py = (e.clientY - r.top) / r.height;
@@ -67,17 +73,18 @@ export default function Hero3D() {
       targetTiltY = rotY;
     }
 
-    el.addEventListener("mouseenter", onEnter);
-    el.addEventListener("mousemove", onMove);
-    el.addEventListener("mouseleave", onLeave);
+    // ✅ Use the stable node for add/remove so listeners match
+    node.addEventListener("mouseenter", onEnter);
+    node.addEventListener("mousemove", onMove);
+    node.addEventListener("mouseleave", onLeave);
 
     raf = requestAnimationFrame(animate);
 
     return () => {
       cancelAnimationFrame(raf);
-      el.removeEventListener("mouseenter", onEnter);
-      el.removeEventListener("mousemove", onMove);
-      el.removeEventListener("mouseleave", onLeave);
+      node.removeEventListener("mouseenter", onEnter);
+      node.removeEventListener("mousemove", onMove);
+      node.removeEventListener("mouseleave", onLeave);
     };
   }, []);
 
@@ -123,10 +130,7 @@ export default function Hero3D() {
         }}
       >
         {/* main prism */}
-        <div
-          className="relative h-[235px] w-[335px]"
-          style={{ transformStyle: "preserve-3d" }}
-        >
+        <div className="relative h-[235px] w-[335px]" style={{ transformStyle: "preserve-3d" }}>
           {/* shadow */}
           <div
             className="absolute inset-0 rounded-[24px]"
@@ -204,9 +208,7 @@ export default function Hero3D() {
                 }}
               />
               <div className="mt-3 text-[10px] text-white/80">Credibility</div>
-              <div className="mt-1 text-xs font-semibold text-white">
-                Verified
-              </div>
+              <div className="mt-1 text-xs font-semibold text-white">Verified</div>
               <div className="mt-4 h-7 rounded-lg bg-white/10" />
             </div>
           </div>

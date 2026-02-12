@@ -1,16 +1,20 @@
-import { NextResponse } from "next/server";
+// src/app/api/tg/admin/campaigns/[id]/tasks/route.ts
+import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-async function authFromHeader(req: Request) {
+async function authFromHeader(req: NextRequest) {
   const initData = req.headers.get("x-tg-initdata") || "";
   if (!initData) throw new Error("missing initdata");
+
   const r = await fetch(new URL("/api/tg/auth", req.url), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ initData }),
   });
+
   const j = await r.json();
   if (!j.ok) throw new Error(j.error || "auth failed");
   return { telegram_user_id: Number(j.telegram_user_id) };
@@ -35,15 +39,17 @@ async function requireCampaignAdmin(telegram_user_id: number, campaign_id: strin
   if (!admin) throw new Error("not admin");
 }
 
-export async function GET(req: Request, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const { id } = await params;
+
     const { telegram_user_id } = await authFromHeader(req);
-    await requireCampaignAdmin(telegram_user_id, params.id);
+    await requireCampaignAdmin(telegram_user_id, id);
 
     const { data } = await supabaseAdmin
       .from("campaign_tasks")
       .select("*")
-      .eq("campaign_id", params.id)
+      .eq("campaign_id", id)
       .order("sort_order", { ascending: true });
 
     return NextResponse.json({ ok: true, tasks: data || [] });
@@ -52,10 +58,12 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   }
 }
 
-export async function POST(req: Request, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const { id } = await params;
+
     const { telegram_user_id } = await authFromHeader(req);
-    await requireCampaignAdmin(telegram_user_id, params.id);
+    await requireCampaignAdmin(telegram_user_id, id);
 
     const body = await req.json();
     const task_type = String(body?.task_type || "").toLowerCase();
@@ -70,7 +78,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const { data: existing } = await supabaseAdmin
       .from("campaign_tasks")
       .select("sort_order")
-      .eq("campaign_id", params.id)
+      .eq("campaign_id", id)
       .order("sort_order", { ascending: false })
       .limit(1);
 
@@ -79,7 +87,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const { data, error } = await supabaseAdmin
       .from("campaign_tasks")
       .insert({
-        campaign_id: params.id,
+        campaign_id: id,
         task_type,
         label,
         target_url,

@@ -14,10 +14,13 @@ export const runtime = "nodejs";
  * - id=<string> -> fetch a single campaign by id OR code
  */
 
-function normalizeTier(t: any): string {
+// ✅ Tie tier type to your Campaign type so TS stays happy even if you change the union later.
+type FairTier = Campaign["minTier"];
+
+function normalizeTier(t: any): FairTier {
   const v = String(t || "bronze").toLowerCase();
-  if (v === "gold" || v === "silver" || v === "bronze") return v;
-  return "bronze";
+  if (v === "gold" || v === "silver" || v === "bronze") return v as FairTier;
+  return "bronze" as FairTier;
 }
 
 function toIsoOrNull(v: any): string | null {
@@ -37,17 +40,15 @@ function normalizeRow(row: any): Campaign {
     toIsoOrNull(row?.created_at) ||
     new Date().toISOString();
 
-  let endsAt =
-    toIsoOrNull(row?.ends_at) ||
-    toIsoOrNull(row?.endsAt) ||
-    null;
+  let endsAt = toIsoOrNull(row?.ends_at) || toIsoOrNull(row?.endsAt) || null;
 
   if (!endsAt) {
     const s = new Date(startsAt).getTime();
     endsAt = new Date(s + 7 * 24 * 60 * 60 * 1000).toISOString();
   }
 
-  const minTier = normalizeTier(row?.min_tier || row?.minTier);
+  // ✅ Now correctly typed as FairTier
+  const minTier: FairTier = normalizeTier(row?.min_tier || row?.minTier);
 
   const baseRewardRaw = row?.base_reward ?? row?.baseReward ?? 0;
   const baseReward = Number.isFinite(Number(baseRewardRaw)) ? Number(baseRewardRaw) : 0;
@@ -76,15 +77,10 @@ function isLive(row: any, nowMs: number) {
 }
 
 async function fetchCampaignRows(): Promise<any[]> {
-  const rawUrl =
-    process.env.SUPABASE_URL ||
-    process.env.NEXT_PUBLIC_SUPABASE_URL ||
-    "";
+  const rawUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 
   const serviceKey =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.SUPABASE_SERVICE_KEY ||
-    "";
+    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || "";
 
   if (!rawUrl) {
     throw new Error(
@@ -144,13 +140,14 @@ export async function GET(req: Request) {
     const id = (searchParams.get("id") || "").trim();
 
     const rows = await fetchCampaignRows();
-
     const nowMs = Date.now();
 
     let filtered = rows;
 
     if (id) {
-      filtered = filtered.filter((r) => String(r?.id || "") === id || String(r?.code || "") === id);
+      filtered = filtered.filter(
+        (r) => String(r?.id || "") === id || String(r?.code || "") === id
+      );
     }
 
     if (onlyLive) {
