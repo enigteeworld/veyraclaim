@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { ConnectionProvider, WalletProvider } from "@solana/wallet-adapter-react";
 import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
 
 import {
+  CoinbaseWalletAdapter,
   PhantomWalletAdapter,
   SolflareWalletAdapter,
 } from "@solana/wallet-adapter-wallets";
@@ -27,19 +28,22 @@ export default function Providers({ children }: { children: React.ReactNode }) {
       })
   );
 
-  const wallets = [
-    new PhantomWalletAdapter(),
-    new SolflareWalletAdapter(),
-  ];
+  // ✅ Memoize wallet adapters so they don’t get re-created on re-renders
+  const wallets = useMemo(
+    () => [
+      new PhantomWalletAdapter(),
+      new SolflareWalletAdapter(),
+      new CoinbaseWalletAdapter(),
+    ],
+    []
+  );
+
+  const endpoint =
+    process.env.NEXT_PUBLIC_SOLANA_RPC_URL ?? "https://api.mainnet-beta.solana.com";
 
   return (
     <QueryClientProvider client={queryClient}>
-      <ConnectionProvider
-        endpoint={
-          process.env.NEXT_PUBLIC_SOLANA_RPC_URL ??
-          "https://api.mainnet-beta.solana.com"
-        }
-      >
+      <ConnectionProvider endpoint={endpoint}>
         {/* autoConnect = false → user must explicitly choose wallet */}
         <WalletProvider wallets={wallets} autoConnect={false}>
           <WalletModalProvider>{children}</WalletModalProvider>
