@@ -231,7 +231,7 @@ export default function Hero3D() {
       {/* caption */}
       <div className="absolute bottom-4 left-4 right-4 flex items-center justify-between">
         <div className="text-sm text-white/80">Immersive credibility layer</div>
-        <div className="text-xs text-white/60">rotates + tilts</div>
+        <div className="text-xs text-white/60"></div>
       </div>
     </div>
   );
