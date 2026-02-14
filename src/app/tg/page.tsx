@@ -225,6 +225,17 @@ type AdminQuestionDraft = {
   optionsCsv: string; // for select
 };
 
+// ✅ Optional bounty (safe: backend can ignore unknown fields)
+type AdminBountyDraft = {
+  enabled: boolean;
+  title: string;
+  reward: string; // string for inputs
+  currency: "USDC" | "SOL" | "FLR" | "OTHER";
+  instructions: string;
+  proofRequired: boolean;
+  deadlineIso: string; // optional
+};
+
 function safeNum(n: any): number | null {
   const x = Number(n);
   if (!Number.isFinite(x)) return null;
@@ -389,6 +400,38 @@ function formatSlotsText(c: Campaign) {
   return "0";
 }
 
+function defaultQuestionDrafts() {
+  return [
+    {
+      id: makeId("q"),
+      type: "text" as const,
+      label: "Your X (Twitter) handle",
+      required: true,
+      placeholder: "@yourhandle",
+      maxLen: "60",
+      optionsCsv: "",
+    },
+    {
+      id: makeId("q"),
+      type: "textarea" as const,
+      label: "Why do you want to join this campaign?",
+      required: true,
+      placeholder: "Short and specific. What makes you a strong fit?",
+      maxLen: "400",
+      optionsCsv: "",
+    },
+    {
+      id: makeId("q"),
+      type: "textarea" as const,
+      label: "Relevant experience (roles, communities, campaigns)",
+      required: false,
+      placeholder: "Communities you’ve contributed to, campaign experience, roles, etc.",
+      maxLen: "300",
+      optionsCsv: "",
+    },
+  ];
+}
+
 export default function TgMiniAppPage() {
   const [tab, setTab] = useState<Tab>("eligibility");
 
@@ -443,35 +486,19 @@ export default function TgMiniAppPage() {
   const [cMaxSlots, setCMaxSlots] = useState<string>("150");
   const [cDesc, setCDesc] = useState<string>("Apply to represent Veyra in community growth and campaigns.");
 
-  const [qDrafts, setQDrafts] = useState<AdminQuestionDraft[]>([
-    {
-      id: makeId("q"),
-      type: "text",
-      label: "Your X (Twitter) handle",
-      required: true,
-      placeholder: "@yourhandle",
-      maxLen: "60",
-      optionsCsv: "",
-    },
-    {
-      id: makeId("q"),
-      type: "textarea",
-      label: "Why should we select you?",
-      required: true,
-      placeholder: "Short and specific. What makes you a strong fit?",
-      maxLen: "400",
-      optionsCsv: "",
-    },
-    {
-      id: makeId("q"),
-      type: "textarea",
-      label: "Relevant experience (roles, communities, campaigns)",
-      required: false,
-      placeholder: "Communities you’ve contributed to, campaign experience, roles, etc.",
-      maxLen: "300",
-      optionsCsv: "",
-    },
-  ]);
+  // ✅ Questions (now for all types)
+  const [qDrafts, setQDrafts] = useState<AdminQuestionDraft[]>(defaultQuestionDrafts());
+
+  // ✅ Optional bounty draft (safe payload)
+  const [bounty, setBounty] = useState<AdminBountyDraft>({
+    enabled: false,
+    title: "Community growth bounty",
+    reward: "",
+    currency: "USDC",
+    instructions: "Describe exactly what participants must do and what proof they should submit.",
+    proofRequired: true,
+    deadlineIso: "",
+  });
 
   const [createMsg, setCreateMsg] = useState<string>("");
   const [createOk, setCreateOk] = useState<string>("");
@@ -535,10 +562,6 @@ export default function TgMiniAppPage() {
 
   /**
    * Hydrate Mini App wallet from Telegram user profile.
-   * Fixes “bot verified wallet not showing” by:
-   * 1) Sending initData in BOTH headers and body (covers backend expectations)
-   * 2) Supporting multiple payload field names
-   * 3) Auto-loading score once (so wallet + tier/score appear immediately)
    */
   useEffect(() => {
     if (!initData) return;
@@ -576,17 +599,14 @@ export default function TgMiniAppPage() {
         const payload = j.data || {};
         setMe(payload);
 
-        // Normalize wallet field (covers old + new shapes)
         const saved = String(payload.saved_wallet || payload.savedWallet || payload.wallet || "").trim();
 
         if (saved && !walletTouched) {
           setWallet(saved);
 
-          // Auto-load score ONCE so the UI reflects verified wallet immediately
           if (!didAutoScoreRef.current && !result) {
             didAutoScoreRef.current = true;
             setTimeout(() => {
-              // do not hijack the user’s current tab
               void checkNow(saved, { goTo: null });
             }, 80);
           }
@@ -808,7 +828,6 @@ export default function TgMiniAppPage() {
 
       setResult(data.data);
 
-      // only change tab if requested (default behavior from buttons is to go to score)
       const goTo = opts?.goTo;
       if (goTo) setTab(goTo);
 
@@ -876,7 +895,7 @@ export default function TgMiniAppPage() {
 
   function asQuestionsForDb(): AppQuestion[] {
     return qDrafts
-      .slice(0, 12)
+      .slice(0, 20)
       .map((q) => {
         const base = {
           id: q.id,
@@ -915,6 +934,24 @@ export default function TgMiniAppPage() {
       .filter((q) => q.label.trim().length > 0);
   }
 
+  function asBountyForDb() {
+    if (!bounty.enabled) return null;
+
+    const rewardNum = Number(bounty.reward);
+    const reward = Number.isFinite(rewardNum) && rewardNum > 0 ? rewardNum : null;
+
+    // keep it minimal/safe: backend can ignore this object completely if not implemented yet
+    return {
+      enabled: true,
+      title: bounty.title.trim().slice(0, 120) || "Bounty",
+      reward,
+      currency: bounty.currency,
+      instructions: bounty.instructions.trim().slice(0, 800) || "",
+      proof_required: !!bounty.proofRequired,
+      deadline: bounty.deadlineIso ? new Date(bounty.deadlineIso).toISOString() : null,
+    };
+  }
+
   async function createCampaign() {
     setCreateMsg("");
     setCreateOk("");
@@ -929,11 +966,14 @@ export default function TgMiniAppPage() {
       return;
     }
 
-    const qs = cType === "ambassador" ? asQuestionsForDb() : [];
+    // ✅ Questions now apply to all types (ambassador requires at least 1; drop/allowlist optional)
+    const qs = asQuestionsForDb();
     if (cType === "ambassador" && qs.length === 0) {
       setCreateMsg("Add at least 1 question for ambassador campaigns.");
       return;
     }
+
+    const bountyObj = asBountyForDb();
 
     setAdminLoading(true);
     try {
@@ -953,7 +993,8 @@ export default function TgMiniAppPage() {
           description: cDesc.trim() || null,
           min_tier: cMinTier,
           max_slots: cMaxSlots.trim() ? Number(cMaxSlots.trim()) : null,
-          questions: qs,
+          questions: qs, // ✅ now sent for all types (backend may ignore if not supported)
+          ...(bountyObj ? { bounty: bountyObj } : {}),
         }),
       });
 
@@ -1014,11 +1055,6 @@ export default function TgMiniAppPage() {
     return m;
   }
 
-  /**
-   * Admin applications list:
-   * - sid via headers (x-app-sid / x-admin-sid)
-   * - initData via accepted header variants
-   */
   async function loadApplications(c: Campaign, silent = false): Promise<{ list: ApplicationRow[]; questions: AppQuestion[] }> {
     if (!adminSession) {
       setAppsErr("Admin session missing. Reopen Admin Panel from the bot and try again.");
@@ -1181,49 +1217,42 @@ export default function TgMiniAppPage() {
       }
 
       const filename = `veyra_${(c.code || "campaign").toLowerCase()}_applications.csv`;
-const csv = lines.join("\n");
+      const csv = lines.join("\n");
 
-// ✅ Telegram WebView-friendly export:
-// - First try local download (works in normal browsers / desktop Telegram)
-// - If blocked, show a copy option + open a new tab with a data URL fallback
-try {
-  downloadTextFile(filename, csv, "text/csv;charset=utf-8");
-  getTg()?.HapticFeedback?.notificationOccurred?.("success");
-} catch {
-  // ignore and fall through
-}
+      // ✅ Telegram WebView-friendly export:
+      try {
+        downloadTextFile(filename, csv, "text/csv;charset=utf-8");
+        getTg()?.HapticFeedback?.notificationOccurred?.("success");
+      } catch {
+        // ignore and fall through
+      }
 
-setTimeout(async () => {
-  // If Telegram blocks downloads, user sees nothing. Provide fallback actions.
-  const tg = getTg();
+      setTimeout(async () => {
+        const tg = getTg();
+        const copied = await copyText(csv);
 
-  // 1) Copy CSV to clipboard (so they can paste into Google Sheets / Notes)
-  const copied = await copyText(csv);
+        // ✅ Telegram does NOT support data: URLs. Use server export instead.
+        try {
+          if (!adminSession?.sid) throw new Error("Missing admin session.");
 
-  // ✅ Telegram does NOT support data: URLs. Use server export instead.
-try {
-  if (!adminSession?.sid) throw new Error("Missing admin session.");
+          const origin = window.location.origin;
+          const url =
+            `${origin}/api/tg/admin/export-csv` +
+            `?campaign_id=${encodeURIComponent(c.id)}` +
+            `&sid=${encodeURIComponent(adminSession.sid)}`;
 
-  const origin = window.location.origin;
-  const url =
-    `${origin}/api/tg/admin/export-csv` +
-    `?campaign_id=${encodeURIComponent(c.id)}` +
-    `&sid=${encodeURIComponent(adminSession.sid)}`;
+          if (tg?.openLink) tg.openLink(url);
+          else window.location.href = url;
+        } catch {
+          // ignore
+        }
 
-  if (tg?.openLink) tg.openLink(url);
-  else window.location.href = url;
-} catch {
-  // ignore
-}
-
-
-  tg?.showAlert?.(
-    copied
-      ? "CSV copied to clipboard. Paste into Google Sheets/Excel if download didn’t start."
-      : "If download didn’t start, Telegram may block it. Use Export via server (recommended) or copy from a desktop browser."
-  );
-}, 250);
-
+        tg?.showAlert?.(
+          copied
+            ? "CSV copied to clipboard. Paste into Google Sheets/Excel if download didn’t start."
+            : "If download didn’t start, Telegram may block it. Use Export via server (recommended) or copy from a desktop browser."
+        );
+      }, 250);
     } catch (e: any) {
       getTg()?.showAlert?.(e?.message || "Export failed.");
       getTg()?.HapticFeedback?.notificationOccurred?.("error");
@@ -1328,10 +1357,10 @@ try {
         <div className="mx-auto flex max-w-3xl items-center gap-3 px-3 py-3 sm:px-4">
           <div className="flex min-w-0 items-center gap-3">
             <img
-  src="/veyra-logo.png"
-  alt="Veyra"
-  className="h-9 w-9 shrink-0 rounded-2xl border border-white/10 bg-black/20 p-1 object-contain shadow-[0_10px_25px_rgba(0,0,0,0.25)]"
-/>
+              src="/veyra-logo.png"
+              alt="Veyra"
+              className="h-9 w-9 shrink-0 rounded-2xl border border-white/10 bg-black/20 p-1 object-contain shadow-[0_10px_25px_rgba(0,0,0,0.25)]"
+            />
 
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold leading-tight">Veyra</div>
@@ -1752,43 +1781,38 @@ try {
                       return (
                         <div key={c.id} className="rounded-2xl border border-white/10 bg-black/25 p-4">
                           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-  <div className="min-w-0">
-    <div className="text-sm font-semibold break-words">{c.title || "Campaign"}</div>
-    {c.description ? <div className="mt-1 text-sm text-zinc-400 break-words">{c.description}</div> : null}
+                            <div className="min-w-0">
+                              <div className="text-sm font-semibold break-words">{c.title || "Campaign"}</div>
+                              {c.description ? <div className="mt-1 text-sm text-zinc-400 break-words">{c.description}</div> : null}
 
-    <div className="mt-2 text-xs text-zinc-500">
-      Min tier: <span className="font-semibold">{min}</span> · Slots:{" "}
-      <span className="font-semibold">{formatSlotsText(c)}</span>
-      {c.starts_at ? (
-        <>
-          {" "}
-          · Starts: <span className="font-mono">{new Date(c.starts_at).toLocaleString()}</span>
-        </>
-      ) : null}
-      {c.ends_at ? (
-        <>
-          {" "}
-          · Ends: <span className="font-mono">{new Date(c.ends_at).toLocaleString()}</span>
-        </>
-      ) : null}
-    </div>
-
-                              
-                              
+                              <div className="mt-2 text-xs text-zinc-500">
+                                Min tier: <span className="font-semibold">{min}</span> · Slots:{" "}
+                                <span className="font-semibold">{formatSlotsText(c)}</span>
+                                {c.starts_at ? (
+                                  <>
+                                    {" "}
+                                    · Starts: <span className="font-mono">{new Date(c.starts_at).toLocaleString()}</span>
+                                  </>
+                                ) : null}
+                                {c.ends_at ? (
+                                  <>
+                                    {" "}
+                                    · Ends: <span className="font-mono">{new Date(c.ends_at).toLocaleString()}</span>
+                                  </>
+                                ) : null}
+                              </div>
 
                               {/* Lightweight project profile panel */}
                               <div className="mt-3 rounded-2xl border border-white/10 bg-white/5 p-3">
                                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-  <div className="text-xs font-semibold text-zinc-200">Project profile</div>
-  <div className="flex flex-wrap items-center gap-2">
-    <div className={cn("rounded-full border px-2 py-[2px] text-[11px] font-semibold", tp.cls)}>{tp.label}</div>
-    <div className={cn("rounded-full border px-2 py-[2px] text-[11px] font-semibold", st.cls)}>{st.label}</div>
-  </div>
-</div>
-
+                                  <div className="text-xs font-semibold text-zinc-200">Project profile</div>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <div className={cn("rounded-full border px-2 py-[2px] text-[11px] font-semibold", tp.cls)}>{tp.label}</div>
+                                    <div className={cn("rounded-full border px-2 py-[2px] text-[11px] font-semibold", st.cls)}>{st.label}</div>
+                                  </div>
+                                </div>
 
                                 <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
-
                                   <div className="rounded-xl border border-white/10 bg-black/25 p-3">
                                     <div className="text-[11px] text-zinc-500">Title</div>
                                     <div className="mt-1 truncate text-xs font-semibold text-zinc-200">{c.title || c.code}</div>
@@ -1817,10 +1841,9 @@ try {
                             </div>
 
                             <div className="flex flex-wrap items-center gap-2 sm:shrink-0 sm:flex-col sm:items-end">
-  <div className={cn("rounded-full border px-3 py-1 text-xs font-semibold", tp.cls)}>{tp.label}</div>
-  <div className={cn("rounded-full border px-3 py-1 text-xs font-semibold", st.cls)}>{st.label}</div>
-</div>
-
+                              <div className={cn("rounded-full border px-3 py-1 text-xs font-semibold", tp.cls)}>{tp.label}</div>
+                              <div className={cn("rounded-full border px-3 py-1 text-xs font-semibold", st.cls)}>{st.label}</div>
+                            </div>
                           </div>
 
                           <div className="mt-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-zinc-300">
@@ -1985,7 +2008,16 @@ try {
                       <div className="mb-1 text-xs text-zinc-400">Type</div>
                       <select
                         value={cType}
-                        onChange={(e) => setCType(e.target.value as AdminCampaignType)}
+                        onChange={(e) => {
+                          const next = e.target.value as AdminCampaignType;
+                          setCType(next);
+
+                          // ✅ ensure we always have placeholders for questions for all campaign types
+                          setQDrafts((prev) => {
+                            if (Array.isArray(prev) && prev.length > 0) return prev;
+                            return defaultQuestionDrafts();
+                          });
+                        }}
                         className={cn(
                           "h-12 w-full rounded-2xl border bg-black/30 px-4 text-sm outline-none",
                           "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
@@ -2055,138 +2087,259 @@ try {
                       <div className="mt-1 text-xs text-zinc-500">{Math.min(cDesc.length, 240)}/240</div>
                     </label>
 
-                    {cType === "ambassador" && (
-                      <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
-                        <div className="flex items-center justify-between">
-                          <div className="text-sm font-semibold">Custom questions</div>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setQDrafts((p) => [
-                                ...p,
-                                { id: makeId("q"), type: "text", label: "", required: false, placeholder: "", maxLen: "", optionsCsv: "" },
-                              ])
-                            }
-                            className="h-9 rounded-xl border border-white/10 bg-white/5 px-3 text-xs font-semibold text-zinc-200 hover:bg-white/10"
-                          >
-                            + Add
-                          </button>
-                        </div>
+                    {/* ✅ QUESTIONS (Now for all campaign types) */}
+                    <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
+                      <div className="flex items-center justify-between">
+                        <div className="text-sm font-semibold">Questions</div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setQDrafts((p) => [
+                              ...p,
+                              { id: makeId("q"), type: "text", label: "", required: false, placeholder: "", maxLen: "", optionsCsv: "" },
+                            ])
+                          }
+                          className="h-9 rounded-xl border border-white/10 bg-white/5 px-3 text-xs font-semibold text-zinc-200 hover:bg-white/10"
+                        >
+                          + Add
+                        </button>
+                      </div>
 
-                        <div className="mt-3 space-y-3">
-                          {qDrafts.map((q, idx) => (
-                            <div key={q.id} className="rounded-2xl border border-white/10 bg-white/5 p-3">
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="text-xs text-zinc-400">Question {idx + 1}</div>
+                      <div className="mt-2 text-xs text-zinc-400">
+                        {cType === "ambassador"
+                          ? "These questions appear in the /apply CODE form."
+                          : "These questions can be shown to users when joining (optional)."}
+                      </div>
+
+                      <div className="mt-3 space-y-3">
+                        {qDrafts.map((q, idx) => (
+                          <div key={q.id} className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="text-xs text-zinc-400">Question {idx + 1}</div>
+                              <button
+                                type="button"
+                                onClick={() => setQDrafts((p) => p.filter((x) => x.id !== q.id))}
+                                className="h-8 rounded-xl border border-white/10 bg-white/5 px-3 text-xs font-semibold text-zinc-200 hover:bg-white/10"
+                              >
+                                Remove
+                              </button>
+                            </div>
+
+                            <div className="mt-3 grid grid-cols-2 gap-3">
+                              <label className="block">
+                                <div className="mb-1 text-xs text-zinc-400">Type</div>
+                                <select
+                                  value={q.type}
+                                  onChange={(e) =>
+                                    setQDrafts((p) => p.map((x) => (x.id === q.id ? { ...x, type: e.target.value as any } : x)))
+                                  }
+                                  className={cn(
+                                    "h-11 w-full rounded-2xl border bg-black/30 px-3 text-sm outline-none",
+                                    "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
+                                  )}
+                                >
+                                  <option value="text">Text</option>
+                                  <option value="textarea">Textarea</option>
+                                  <option value="select">Select</option>
+                                </select>
+                              </label>
+
+                              <label className="block">
+                                <div className="mb-1 text-xs text-zinc-400">Required</div>
                                 <button
                                   type="button"
-                                  onClick={() => setQDrafts((p) => p.filter((x) => x.id !== q.id))}
-                                  className="h-8 rounded-xl border border-white/10 bg-white/5 px-3 text-xs font-semibold text-zinc-200 hover:bg-white/10"
+                                  onClick={() => setQDrafts((p) => p.map((x) => (x.id === q.id ? { ...x, required: !x.required } : x)))}
+                                  className={cn(
+                                    "h-11 w-full rounded-2xl border px-3 text-sm font-semibold",
+                                    "border-white/10 bg-black/30 hover:bg-white/5",
+                                    q.required ? "text-emerald-200" : "text-zinc-200"
+                                  )}
                                 >
-                                  Remove
+                                  {q.required ? "Yes (required)" : "No (optional)"}
                                 </button>
-                              </div>
+                              </label>
+                            </div>
 
-                              <div className="mt-3 grid grid-cols-2 gap-3">
-                                <label className="block">
-                                  <div className="mb-1 text-xs text-zinc-400">Type</div>
-                                  <select
-                                    value={q.type}
-                                    onChange={(e) =>
-                                      setQDrafts((p) => p.map((x) => (x.id === q.id ? { ...x, type: e.target.value as any } : x)))
-                                    }
-                                    className={cn(
-                                      "h-11 w-full rounded-2xl border bg-black/30 px-3 text-sm outline-none",
-                                      "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
-                                    )}
-                                  >
-                                    <option value="text">Text</option>
-                                    <option value="textarea">Textarea</option>
-                                    <option value="select">Select</option>
-                                  </select>
-                                </label>
+                            <label className="mt-3 block">
+                              <div className="mb-1 text-xs text-zinc-400">Label</div>
+                              <input
+                                value={q.label}
+                                onChange={(e) => setQDrafts((p) => p.map((x) => (x.id === q.id ? { ...x, label: e.target.value } : x)))}
+                                placeholder="e.g. Your X handle"
+                                className={cn(
+                                  "h-11 w-full rounded-2xl border bg-black/30 px-3 text-sm outline-none",
+                                  "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
+                                )}
+                              />
+                            </label>
 
-                                <label className="block">
-                                  <div className="mb-1 text-xs text-zinc-400">Required</div>
-                                  <button
-                                    type="button"
-                                    onClick={() => setQDrafts((p) => p.map((x) => (x.id === q.id ? { ...x, required: !x.required } : x)))}
-                                    className={cn(
-                                      "h-11 w-full rounded-2xl border px-3 text-sm font-semibold",
-                                      "border-white/10 bg-black/30 hover:bg-white/5",
-                                      q.required ? "text-emerald-200" : "text-zinc-200"
-                                    )}
-                                  >
-                                    {q.required ? "Yes (required)" : "No (optional)"}
-                                  </button>
-                                </label>
-                              </div>
-
+                            {q.type === "select" ? (
                               <label className="mt-3 block">
-                                <div className="mb-1 text-xs text-zinc-400">Label</div>
+                                <div className="mb-1 text-xs text-zinc-400">Options (comma separated)</div>
                                 <input
-                                  value={q.label}
-                                  onChange={(e) => setQDrafts((p) => p.map((x) => (x.id === q.id ? { ...x, label: e.target.value } : x)))}
-                                  placeholder="e.g. Why should we select you?"
+                                  value={q.optionsCsv}
+                                  onChange={(e) => setQDrafts((p) => p.map((x) => (x.id === q.id ? { ...x, optionsCsv: e.target.value } : x)))}
+                                  placeholder="Option A, Option B, Option C"
                                   className={cn(
                                     "h-11 w-full rounded-2xl border bg-black/30 px-3 text-sm outline-none",
                                     "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
                                   )}
                                 />
                               </label>
-
-                              {q.type === "select" ? (
-                                <label className="mt-3 block">
-                                  <div className="mb-1 text-xs text-zinc-400">Options (comma separated)</div>
+                            ) : (
+                              <div className="mt-3 grid grid-cols-2 gap-3">
+                                <label className="block">
+                                  <div className="mb-1 text-xs text-zinc-400">Placeholder</div>
                                   <input
-                                    value={q.optionsCsv}
-                                    onChange={(e) => setQDrafts((p) => p.map((x) => (x.id === q.id ? { ...x, optionsCsv: e.target.value } : x)))}
-                                    placeholder="Option A, Option B, Option C"
+                                    value={q.placeholder}
+                                    onChange={(e) => setQDrafts((p) => p.map((x) => (x.id === q.id ? { ...x, placeholder: e.target.value } : x)))}
+                                    placeholder="Type your answer…"
                                     className={cn(
                                       "h-11 w-full rounded-2xl border bg-black/30 px-3 text-sm outline-none",
                                       "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
                                     )}
                                   />
                                 </label>
-                              ) : (
-                                <div className="mt-3 grid grid-cols-2 gap-3">
-                                  <label className="block">
-                                    <div className="mb-1 text-xs text-zinc-400">Placeholder</div>
-                                    <input
-                                      value={q.placeholder}
-                                      onChange={(e) => setQDrafts((p) => p.map((x) => (x.id === q.id ? { ...x, placeholder: e.target.value } : x)))}
-                                      placeholder="Type your answer…"
-                                      className={cn(
-                                        "h-11 w-full rounded-2xl border bg-black/30 px-3 text-sm outline-none",
-                                        "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
-                                      )}
-                                    />
-                                  </label>
 
-                                  <label className="block">
-                                    <div className="mb-1 text-xs text-zinc-400">Max length (optional)</div>
-                                    <input
-                                      value={q.maxLen}
-                                      onChange={(e) => setQDrafts((p) => p.map((x) => (x.id === q.id ? { ...x, maxLen: e.target.value } : x)))}
-                                      inputMode="numeric"
-                                      placeholder="e.g. 240"
-                                      className={cn(
-                                        "h-11 w-full rounded-2xl border bg-black/30 px-3 text-sm outline-none",
-                                        "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
-                                      )}
-                                    />
-                                  </label>
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-
-                        <div className="mt-3 text-xs text-zinc-400">
-                          These questions appear in the <span className="font-mono">/apply CODE</span> form.
-                        </div>
+                                <label className="block">
+                                  <div className="mb-1 text-xs text-zinc-400">Max length (optional)</div>
+                                  <input
+                                    value={q.maxLen}
+                                    onChange={(e) => setQDrafts((p) => p.map((x) => (x.id === q.id ? { ...x, maxLen: e.target.value } : x)))}
+                                    inputMode="numeric"
+                                    placeholder="e.g. 240"
+                                    className={cn(
+                                      "h-11 w-full rounded-2xl border bg-black/30 px-3 text-sm outline-none",
+                                      "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
+                                    )}
+                                  />
+                                </label>
+                              </div>
+                            )}
+                          </div>
+                        ))}
                       </div>
-                    )}
+
+                      <div className="mt-3 text-xs text-zinc-400">
+                        You can leave questions empty for Drop/Allowlist. Ambassador requires at least 1.
+                      </div>
+                    </div>
+
+                    {/* ✅ OPTIONAL BOUNTY (safe payload) */}
+                    <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
+                      <div className="flex items-center justify-between">
+                        <div className="text-sm font-semibold">Bounty (optional)</div>
+                        <button
+                          type="button"
+                          onClick={() => setBounty((p) => ({ ...p, enabled: !p.enabled }))}
+                          className={cn(
+                            "h-9 rounded-xl border px-3 text-xs font-semibold",
+                            "border-white/10 bg-white/5 hover:bg-white/10",
+                            bounty.enabled ? "text-emerald-200" : "text-zinc-200"
+                          )}
+                        >
+                          {bounty.enabled ? "Enabled" : "Disabled"}
+                        </button>
+                      </div>
+
+                      <div className="mt-2 text-xs text-zinc-400">
+                        This is a safe “patch”: the backend can ignore the bounty object until you wire full bounty flow.
+                      </div>
+
+                      {bounty.enabled && (
+                        <div className="mt-3 space-y-3">
+                          <label className="block">
+                            <div className="mb-1 text-xs text-zinc-400">Bounty title</div>
+                            <input
+                              value={bounty.title}
+                              onChange={(e) => setBounty((p) => ({ ...p, title: e.target.value }))}
+                              className={cn(
+                                "h-11 w-full rounded-2xl border bg-black/30 px-3 text-sm outline-none",
+                                "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
+                              )}
+                            />
+                          </label>
+
+                          <div className="grid grid-cols-2 gap-3">
+                            <label className="block">
+                              <div className="mb-1 text-xs text-zinc-400">Reward amount</div>
+                              <input
+                                value={bounty.reward}
+                                onChange={(e) => setBounty((p) => ({ ...p, reward: e.target.value }))}
+                                inputMode="decimal"
+                                placeholder="e.g. 50"
+                                className={cn(
+                                  "h-11 w-full rounded-2xl border bg-black/30 px-3 text-sm outline-none",
+                                  "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
+                                )}
+                              />
+                            </label>
+
+                            <label className="block">
+                              <div className="mb-1 text-xs text-zinc-400">Currency</div>
+                              <select
+                                value={bounty.currency}
+                                onChange={(e) => setBounty((p) => ({ ...p, currency: e.target.value as any }))}
+                                className={cn(
+                                  "h-11 w-full rounded-2xl border bg-black/30 px-3 text-sm outline-none",
+                                  "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
+                                )}
+                              >
+                                <option value="USDC">USDC</option>
+                                <option value="SOL">SOL</option>
+                                <option value="FLR">FLR</option>
+                                <option value="OTHER">Other</option>
+                              </select>
+                            </label>
+                          </div>
+
+                          <label className="block">
+                            <div className="mb-1 text-xs text-zinc-400">Instructions</div>
+                            <textarea
+                              value={bounty.instructions}
+                              onChange={(e) => setBounty((p) => ({ ...p, instructions: e.target.value }))}
+                              rows={4}
+                              className={cn(
+                                "w-full rounded-2xl border bg-black/30 px-4 py-3 text-sm outline-none",
+                                "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
+                              )}
+                              maxLength={800}
+                            />
+                            <div className="mt-1 text-xs text-zinc-500">{Math.min(bounty.instructions.length, 800)}/800</div>
+                          </label>
+
+                          <div className="grid grid-cols-2 gap-3">
+                            <label className="block">
+                              <div className="mb-1 text-xs text-zinc-400">Deadline (optional)</div>
+                              <input
+                                value={bounty.deadlineIso}
+                                onChange={(e) => setBounty((p) => ({ ...p, deadlineIso: e.target.value }))}
+                                type="datetime-local"
+                                className={cn(
+                                  "h-11 w-full rounded-2xl border bg-black/30 px-3 text-sm outline-none",
+                                  "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
+                                )}
+                              />
+                            </label>
+
+                            <label className="block">
+                              <div className="mb-1 text-xs text-zinc-400">Proof required</div>
+                              <button
+                                type="button"
+                                onClick={() => setBounty((p) => ({ ...p, proofRequired: !p.proofRequired }))}
+                                className={cn(
+                                  "h-11 w-full rounded-2xl border px-3 text-sm font-semibold",
+                                  "border-white/10 bg-black/30 hover:bg-white/5",
+                                  bounty.proofRequired ? "text-emerald-200" : "text-zinc-200"
+                                )}
+                              >
+                                {bounty.proofRequired ? "Yes" : "No"}
+                              </button>
+                            </label>
+                          </div>
+                        </div>
+                      )}
+                    </div>
 
                     <button
                       type="button"
@@ -2827,3 +2980,4 @@ try {
     </div>
   );
 }
+

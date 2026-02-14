@@ -16,7 +16,15 @@ export const runtime = "nodejs";
  * 3) Still supports legacy x-tg-initdata auth (Telegram WebApp initData) with local signature verify
  * 4) GET fallback: if no project_admins rows exist, still returns campaigns created by this admin
  * 5) ✅ Adds entries_count (computed from campaign_entries) so UI shows 1/15 instead of 0/15
+ *
+ * ✅ PRODUCTION SAFETY PATCH:
+ * - By default, ADMIN campaign listing is scoped to campaigns created by the authenticated telegram account.
+ *   This prevents "campaign list leakage" if the same invite code is used in another Telegram account.
+ *
+ * - If you ever want shared-admin visibility across the same project, set:
+ *   ADMIN_CAMPAIGNS_STRICT_CREATOR_SCOPE=0
  */
+const STRICT_CREATOR_SCOPE = process.env.ADMIN_CAMPAIGNS_STRICT_CREATOR_SCOPE !== "0";
 
 function parseInitData(initData: string) {
   const params = new URLSearchParams(initData);
@@ -103,7 +111,7 @@ async function authFromAdminSession(req: Request) {
   const telegram_user_id = Number(data.telegram_user_id);
   if (!telegram_user_id) throw new Error("invalid telegram_user_id in session");
 
-  return { telegram_user_id, sid };
+  return { telegram_user_id, sid, state_json: data.state_json || null };
 }
 
 /**
@@ -200,7 +208,8 @@ async function attachEntriesCount(campaigns: any[]) {
 
 export async function GET(req: Request) {
   try {
-    const { telegram_user_id } = await auth(req);
+    const a = await auth(req);
+    const telegram_user_id = Number((a as any)?.telegram_user_id);
 
     // Projects where this user is an admin
     const { data: admins, error: adminsErr } = await supabaseAdmin
@@ -210,7 +219,7 @@ export async function GET(req: Request) {
 
     if (adminsErr) throw new Error(adminsErr.message);
 
-    const projectIds = (admins || []).map((a: any) => a.project_id).filter(Boolean);
+    const projectIds = (admins || []).map((x: any) => x.project_id).filter(Boolean);
 
     // ✅ Fallback: if project_admins is not set up (or empty), still show campaigns created by this admin
     if (!projectIds.length) {
@@ -226,12 +235,21 @@ export async function GET(req: Request) {
       return NextResponse.json({ ok: true, campaigns: withCounts });
     }
 
-    // Normal path: campaigns across projects this user admins
-    const { data: campaigns, error: campErr } = await supabaseAdmin
-      .from("campaigns")
-      .select("*")
-      .in("project_id", projectIds)
-      .order("created_at", { ascending: false });
+    /**
+     * ✅ PRODUCTION SAFETY:
+     * Even if the same invite code is reused in another Telegram account (granting them project_admins access),
+     * we prevent campaign list leakage by scoping the list to campaigns CREATED BY THIS TELEGRAM ACCOUNT.
+     *
+     * If you ever want shared admin view across a project, set:
+     * ADMIN_CAMPAIGNS_STRICT_CREATOR_SCOPE=0
+     */
+    let q = supabaseAdmin.from("campaigns").select("*").in("project_id", projectIds);
+
+    if (STRICT_CREATOR_SCOPE) {
+      q = q.eq("created_by_telegram_user_id", telegram_user_id);
+    }
+
+    const { data: campaigns, error: campErr } = await q.order("created_at", { ascending: false });
 
     if (campErr) throw new Error(campErr.message);
 
@@ -244,7 +262,7 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const { telegram_user_id } = await auth(req);
+    const { telegram_user_id } = (await auth(req)) as any;
     const body = await req.json().catch(() => ({} as any));
 
     const project_id = String(body?.project_id || "").trim();
@@ -261,7 +279,7 @@ export async function POST(req: Request) {
     if (!project_id) return NextResponse.json({ ok: false, error: "missing project_id" }, { status: 400 });
     if (!title) return NextResponse.json({ ok: false, error: "missing title" }, { status: 400 });
 
-    await requireAdmin(telegram_user_id, project_id);
+    await requireAdmin(Number(telegram_user_id), project_id);
 
     // Code generator (same style you already use)
     const code = generateAmbCode();
@@ -277,7 +295,7 @@ export async function POST(req: Request) {
         max_slots,
         starts_at: new Date().toISOString(),
         ends_at: null,
-        created_by_telegram_user_id: telegram_user_id,
+        created_by_telegram_user_id: Number(telegram_user_id),
         project_id,
       })
       .select("*")
