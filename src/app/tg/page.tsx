@@ -2240,7 +2240,7 @@ export default function TgMiniAppPage() {
                       </div>
 
                       <div className="mt-2 text-xs text-zinc-400">
-                        This is a safe “patch”: the backend can ignore the bounty object until you wire full bounty flow.
+                        
                       </div>
 
                       {bounty.enabled && (
