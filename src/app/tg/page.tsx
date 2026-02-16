@@ -62,7 +62,6 @@ type AdminSessionPayload = {
 };
 
 type TgMePayload = {
-  // backend might return any of these (we normalize)
   saved_wallet?: string | null;
   savedWallet?: string | null;
   wallet?: string | null;
@@ -95,7 +94,6 @@ type Campaign = {
   created_at?: string | null;
   project_id?: string | null;
 
-  // Enriched counts (your APIs may use any of these names)
   entries_count?: number | null;
   applicants_count?: number | null;
   applications_count?: number | null;
@@ -105,7 +103,6 @@ type Campaign = {
   applicationsCount?: number | null;
   submissionsCount?: number | null;
 
-  // Optional: if your admin campaigns endpoint returns questions
   questions?: AppQuestion[] | null;
 };
 
@@ -120,7 +117,6 @@ type ApplicationRow = {
   answers?: Record<string, any> | null;
   proof_links?: any[] | null;
 
-  // optional if backend later provides it
   is_duplicate?: boolean | null;
 };
 
@@ -221,19 +217,18 @@ type AdminQuestionDraft = {
   label: string;
   required: boolean;
   placeholder: string;
-  maxLen: string; // keep as string for input
-  optionsCsv: string; // for select
+  maxLen: string;
+  optionsCsv: string;
 };
 
-// ✅ Optional bounty (safe: backend can ignore unknown fields)
 type AdminBountyDraft = {
   enabled: boolean;
   title: string;
-  reward: string; // string for inputs
+  reward: string;
   currency: "USDC" | "SOL" | "FLR" | "OTHER";
   instructions: string;
   proofRequired: boolean;
-  deadlineIso: string; // optional
+  deadlineIso: string;
 };
 
 function safeNum(n: any): number | null {
@@ -295,7 +290,6 @@ function escapeCsvCell(v: any) {
 function downloadTextFile(filename: string, content: string, mime = "text/plain;charset=utf-8") {
   if (typeof window === "undefined") return;
 
-  // Add UTF-8 BOM for Excel friendliness when exporting CSV
   const bom = mime.startsWith("text/csv") ? "\ufeff" : "";
   const blob = new Blob([bom + content], { type: mime });
 
@@ -339,7 +333,6 @@ function safeStringify(v: any) {
   }
 }
 
-/** Always send Telegram initData using multiple header spellings (server may accept different ones). */
 function tgInitHeaders(initData: string) {
   const id = (initData || "").toString();
   if (!id) return {};
@@ -391,8 +384,6 @@ function normalizeCampaign(raw: any): Campaign {
 function formatSlotsText(c: Campaign) {
   const filled = getFilledCount(c);
   const max = getMaxSlots(c);
-
-  // If backend doesn't provide filled, show 0/max instead of "—/max" (cleaner + consistent)
   const filledSafe = filled === null ? 0 : filled;
 
   if (typeof max === "number" && max > 0) return `${filledSafe}/${max}`;
@@ -447,23 +438,19 @@ export default function TgMiniAppPage() {
   const walletInputRef = useRef<HTMLInputElement | null>(null);
 
   const kind = useMemo(() => detectKind(wallet), [wallet]);
-  const activeWallet = useMemo(() => (result?.wallet || wallet || "").trim(), [result?.wallet, wallet]);
   const headerWalletLabel = useMemo(() => {
     if (result?.wallet) return shortWallet(result.wallet);
     if (wallet.trim()) return shortWallet(wallet);
     return "Wallet";
   }, [result?.wallet, wallet]);
 
-  // Telegram initData
   const [initData, setInitData] = useState<string>("");
   const [meLoading, setMeLoading] = useState(false);
   const [meErr, setMeErr] = useState<string>("");
   const [me, setMe] = useState<TgMePayload | null>(null);
 
-  // Prevent repeated auto-check loops
   const didAutoScoreRef = useRef(false);
 
-  // User Apply Session
   const [sid, setSid] = useState<string>("");
   const [applyLoading, setApplyLoading] = useState(false);
   const [applyErr, setApplyErr] = useState<string>("");
@@ -471,25 +458,27 @@ export default function TgMiniAppPage() {
   const [applySession, setApplySession] = useState<ApplySessionPayload | null>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
 
-  // Admin Mode
-  const [isAdmin, setIsAdmin] = useState(false);
+  // ✅ STOP-FLASH PATCH: init from URL (prevents first render mismatch)
+  const [isAdmin, setIsAdmin] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    const adminFlag = new URL(window.location.href).searchParams.get("admin") || "";
+    return adminFlag === "1" || adminFlag.toLowerCase() === "true";
+  });
+
   const [adminLoading, setAdminLoading] = useState(false);
   const [adminErr, setAdminErr] = useState("");
   const [adminSession, setAdminSession] = useState<AdminSessionPayload | null>(null);
 
-  const showAdminTabs = isAdmin; // admin-only tabs are visible only when opened in admin mode
+  const showAdminTabs = isAdmin;
 
-  // Admin: create campaign form
   const [cType, setCType] = useState<AdminCampaignType>("ambassador");
   const [cTitle, setCTitle] = useState("Veyra Ambassador Program");
   const [cMinTier, setCMinTier] = useState<Tier>("bronze");
   const [cMaxSlots, setCMaxSlots] = useState<string>("150");
   const [cDesc, setCDesc] = useState<string>("Apply to represent Veyra in community growth and campaigns.");
 
-  // ✅ Questions (now for all types)
   const [qDrafts, setQDrafts] = useState<AdminQuestionDraft[]>(defaultQuestionDrafts());
 
-  // ✅ Optional bounty draft (safe payload)
   const [bounty, setBounty] = useState<AdminBountyDraft>({
     enabled: false,
     title: "Community growth bounty",
@@ -503,13 +492,11 @@ export default function TgMiniAppPage() {
   const [createMsg, setCreateMsg] = useState<string>("");
   const [createOk, setCreateOk] = useState<string>("");
 
-  // Campaign listing
   const [campLoading, setCampLoading] = useState(false);
   const [campErr, setCampErr] = useState("");
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [campLastLoadedAt, setCampLastLoadedAt] = useState<number | null>(null);
 
-  // Applications Modal (Admin)
   const [appsOpen, setAppsOpen] = useState(false);
   const [appsCampaign, setAppsCampaign] = useState<Campaign | null>(null);
   const [appsLoading, setAppsLoading] = useState(false);
@@ -518,7 +505,6 @@ export default function TgMiniAppPage() {
   const [appsSort, setAppsSort] = useState<"recent" | "tier" | "fairscore">("recent");
   const [appsQuery, setAppsQuery] = useState<string>("");
 
-  // Questions for this campaign (for pretty answer rendering + CSV columns)
   const [appsQuestions, setAppsQuestions] = useState<AppQuestion[]>([]);
 
   useEffect(() => {
@@ -555,14 +541,16 @@ export default function TgMiniAppPage() {
 
     const adminFlag = getQueryParam("admin");
     if (adminFlag === "1" || adminFlag.toLowerCase() === "true") {
+      // ✅ STOP-FLASH PATCH: entering admin clears any public list immediately
       setIsAdmin(true);
       setTab("campaigns");
+      setCampaigns([]);
+      setCampErr("");
+      setCampLastLoadedAt(null);
     }
   }, []);
 
-  /**
-   * Hydrate Mini App wallet from Telegram user profile.
-   */
+  // Load Telegram profile
   useEffect(() => {
     if (!initData) return;
 
@@ -626,7 +614,7 @@ export default function TgMiniAppPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initData, walletTouched]);
 
-  // Load user apply session
+  // Load apply session
   useEffect(() => {
     if (!sid) return;
 
@@ -718,6 +706,11 @@ export default function TgMiniAppPage() {
 
         if (cancelled) return;
         setAdminSession(data.data);
+
+        // extra-safety so nothing lingers
+        setCampaigns([]);
+        setCampLastLoadedAt(null);
+
         getTg()?.HapticFeedback?.notificationOccurred?.("success");
       } catch (e: any) {
         if (cancelled) return;
@@ -736,7 +729,16 @@ export default function TgMiniAppPage() {
 
   // Load campaigns
   useEffect(() => {
-    if (!tab || tab !== "campaigns") return;
+    if (tab !== "campaigns") return;
+
+    // ✅ STOP-FLASH PATCH: never call public campaigns in admin mode until adminSession exists
+    if (isAdmin && !adminSession) {
+      setCampaigns([]);
+      setCampErr("");
+      setCampLoading(true);
+      return;
+    }
+
     if (campLastLoadedAt && Date.now() - campLastLoadedAt < 10_000) return;
 
     let cancelled = false;
@@ -793,7 +795,7 @@ export default function TgMiniAppPage() {
   async function checkNow(
     w: string,
     opts?: {
-      goTo?: Tab | null; // null = don't change tab
+      goTo?: Tab | null;
     }
   ) {
     const input = (w || "").trim();
@@ -940,7 +942,6 @@ export default function TgMiniAppPage() {
     const rewardNum = Number(bounty.reward);
     const reward = Number.isFinite(rewardNum) && rewardNum > 0 ? rewardNum : null;
 
-    // keep it minimal/safe: backend can ignore this object completely if not implemented yet
     return {
       enabled: true,
       title: bounty.title.trim().slice(0, 120) || "Bounty",
@@ -966,7 +967,6 @@ export default function TgMiniAppPage() {
       return;
     }
 
-    // ✅ Questions now apply to all types (ambassador requires at least 1; drop/allowlist optional)
     const qs = asQuestionsForDb();
     if (cType === "ambassador" && qs.length === 0) {
       setCreateMsg("Add at least 1 question for ambassador campaigns.");
@@ -993,7 +993,7 @@ export default function TgMiniAppPage() {
           description: cDesc.trim() || null,
           min_tier: cMinTier,
           max_slots: cMaxSlots.trim() ? Number(cMaxSlots.trim()) : null,
-          questions: qs, // ✅ now sent for all types (backend may ignore if not supported)
+          questions: qs,
           ...(bountyObj ? { bounty: bountyObj } : {}),
         }),
       });
@@ -1219,19 +1219,17 @@ export default function TgMiniAppPage() {
       const filename = `veyra_${(c.code || "campaign").toLowerCase()}_applications.csv`;
       const csv = lines.join("\n");
 
-      // ✅ Telegram WebView-friendly export:
       try {
         downloadTextFile(filename, csv, "text/csv;charset=utf-8");
         getTg()?.HapticFeedback?.notificationOccurred?.("success");
       } catch {
-        // ignore and fall through
+        // ignore
       }
 
       setTimeout(async () => {
         const tg = getTg();
         const copied = await copyText(csv);
 
-        // ✅ Telegram does NOT support data: URLs. Use server export instead.
         try {
           if (!adminSession?.sid) throw new Error("Missing admin session.");
 
@@ -1307,7 +1305,6 @@ export default function TgMiniAppPage() {
     return list;
   }, [apps, appsQuery, appsSort]);
 
-  // Apply UI helpers
   const applyCampaign = applySession?.campaign;
   const applyQs = (applyCampaign?.questions || []) as AppQuestion[];
 
@@ -2525,102 +2522,101 @@ export default function TgMiniAppPage() {
       </main>
 
       {/* Bottom nav */}
-<nav className="fixed bottom-0 left-0 right-0 z-40">
-  {/* Glass background */}
-  <div className="border-t border-white/10 bg-[#070A0D]/80 backdrop-blur-xl">
-    <div className="mx-auto w-full max-w-3xl px-3 py-2 sm:px-4">
-      {/* Premium pill container */}
-      <div className="flex items-center gap-2 rounded-3xl border border-white/10 bg-white/[0.04] p-2 shadow-[0_-10px_30px_rgba(0,0,0,0.35)]">
-        {/* Tabs group (fills space) */}
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setTab("eligibility")}
-            className={cn(
-              "flex min-w-0 flex-1 items-center justify-center gap-2 rounded-2xl px-3 py-2.5 text-[13px] font-semibold transition",
-              "border border-transparent",
-              tab === "eligibility"
-                ? "bg-gradient-to-r from-purple-600/70 to-fuchsia-600/70 text-white shadow-[0_10px_25px_rgba(168,85,247,0.18)] border-white/10"
-                : "text-zinc-300 hover:bg-white/5 hover:border-white/10"
-            )}
-          >
-            <span className="text-base leading-none">✅</span>
-            <span className="truncate hidden sm:inline">Eligibility</span>
-            <span className="truncate sm:hidden">Check</span>
-          </button>
+      <nav className="fixed bottom-0 left-0 right-0 z-40">
+        {/* Glass background */}
+        <div className="border-t border-white/10 bg-[#070A0D]/80 backdrop-blur-xl">
+          <div className="mx-auto w-full max-w-3xl px-3 py-2 sm:px-4">
+            {/* Premium pill container */}
+            <div className="flex items-center gap-2 rounded-3xl border border-white/10 bg-white/[0.04] p-2 shadow-[0_-10px_30px_rgba(0,0,0,0.35)]">
+              {/* Tabs group (fills space) */}
+              <div className="flex min-w-0 flex-1 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTab("eligibility")}
+                  className={cn(
+                    "flex min-w-0 flex-1 items-center justify-center gap-2 rounded-2xl px-3 py-2.5 text-[13px] font-semibold transition",
+                    "border border-transparent",
+                    tab === "eligibility"
+                      ? "bg-gradient-to-r from-purple-600/70 to-fuchsia-600/70 text-white shadow-[0_10px_25px_rgba(168,85,247,0.18)] border-white/10"
+                      : "text-zinc-300 hover:bg-white/5 hover:border-white/10"
+                  )}
+                >
+                  <span className="text-base leading-none">✅</span>
+                  <span className="truncate hidden sm:inline">Eligibility</span>
+                  <span className="truncate sm:hidden">Check</span>
+                </button>
 
-          <button
-            type="button"
-            onClick={() => setTab("reputation")}
-            className={cn(
-              "flex min-w-0 flex-1 items-center justify-center gap-2 rounded-2xl px-3 py-2.5 text-[13px] font-semibold transition",
-              "border border-transparent",
-              tab === "reputation"
-                ? "bg-gradient-to-r from-purple-600/70 to-fuchsia-600/70 text-white shadow-[0_10px_25px_rgba(168,85,247,0.18)] border-white/10"
-                : "text-zinc-300 hover:bg-white/5 hover:border-white/10"
-            )}
-          >
-            <span className="text-base leading-none">📊</span>
-            <span className="truncate hidden sm:inline">Score</span>
-            <span className="truncate sm:hidden">Score</span>
-          </button>
+                <button
+                  type="button"
+                  onClick={() => setTab("reputation")}
+                  className={cn(
+                    "flex min-w-0 flex-1 items-center justify-center gap-2 rounded-2xl px-3 py-2.5 text-[13px] font-semibold transition",
+                    "border border-transparent",
+                    tab === "reputation"
+                      ? "bg-gradient-to-r from-purple-600/70 to-fuchsia-600/70 text-white shadow-[0_10px_25px_rgba(168,85,247,0.18)] border-white/10"
+                      : "text-zinc-300 hover:bg-white/5 hover:border-white/10"
+                  )}
+                >
+                  <span className="text-base leading-none">📊</span>
+                  <span className="truncate hidden sm:inline">Score</span>
+                  <span className="truncate sm:hidden">Score</span>
+                </button>
 
-          <button
-            type="button"
-            onClick={() => setTab("campaigns")}
-            className={cn(
-              "flex min-w-0 flex-1 items-center justify-center gap-2 rounded-2xl px-3 py-2.5 text-[13px] font-semibold transition",
-              "border border-transparent",
-              tab === "campaigns"
-                ? "bg-gradient-to-r from-purple-600/70 to-fuchsia-600/70 text-white shadow-[0_10px_25px_rgba(168,85,247,0.18)] border-white/10"
-                : "text-zinc-300 hover:bg-white/5 hover:border-white/10"
-            )}
-          >
-            <span className="text-base leading-none">🎯</span>
-            <span className="truncate hidden sm:inline">Campaigns</span>
-            <span className="truncate sm:hidden">Camp</span>
-          </button>
+                <button
+                  type="button"
+                  onClick={() => setTab("campaigns")}
+                  className={cn(
+                    "flex min-w-0 flex-1 items-center justify-center gap-2 rounded-2xl px-3 py-2.5 text-[13px] font-semibold transition",
+                    "border border-transparent",
+                    tab === "campaigns"
+                      ? "bg-gradient-to-r from-purple-600/70 to-fuchsia-600/70 text-white shadow-[0_10px_25px_rgba(168,85,247,0.18)] border-white/10"
+                      : "text-zinc-300 hover:bg-white/5 hover:border-white/10"
+                  )}
+                >
+                  <span className="text-base leading-none">🎯</span>
+                  <span className="truncate hidden sm:inline">Campaigns</span>
+                  <span className="truncate sm:hidden">Camp</span>
+                </button>
 
-          {showAdminTabs && (
-            <button
-              type="button"
-              onClick={() => setTab("onboarding")}
-              className={cn(
-                "flex min-w-0 flex-1 items-center justify-center gap-2 rounded-2xl px-3 py-2.5 text-[13px] font-semibold transition",
-                "border border-transparent",
-                tab === "onboarding"
-                  ? "bg-gradient-to-r from-purple-600/70 to-fuchsia-600/70 text-white shadow-[0_10px_25px_rgba(168,85,247,0.18)] border-white/10"
-                  : "text-zinc-300 hover:bg-white/5 hover:border-white/10"
-              )}
-            >
-              <span className="text-base leading-none">🧭</span>
-              <span className="truncate hidden sm:inline">Onboarding</span>
-              <span className="truncate sm:hidden">Kit</span>
-            </button>
-          )}
+                {showAdminTabs && (
+                  <button
+                    type="button"
+                    onClick={() => setTab("onboarding")}
+                    className={cn(
+                      "flex min-w-0 flex-1 items-center justify-center gap-2 rounded-2xl px-3 py-2.5 text-[13px] font-semibold transition",
+                      "border border-transparent",
+                      tab === "onboarding"
+                        ? "bg-gradient-to-r from-purple-600/70 to-fuchsia-600/70 text-white shadow-[0_10px_25px_rgba(168,85,247,0.18)] border-white/10"
+                        : "text-zinc-300 hover:bg-white/5 hover:border-white/10"
+                    )}
+                  >
+                    <span className="text-base leading-none">🧭</span>
+                    <span className="truncate hidden sm:inline">Onboarding</span>
+                    <span className="truncate sm:hidden">Kit</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Divider */}
+              <div className="mx-1 h-8 w-px bg-white/10" />
+
+              {/* Premium Top button (fixed size, doesn’t stretch) */}
+              <button
+                type="button"
+                onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+                className={cn(
+                  "inline-flex h-11 w-11 items-center justify-center rounded-2xl",
+                  "border border-white/10 bg-white/5 text-zinc-200",
+                  "hover:bg-white/10 active:scale-[0.99] transition"
+                )}
+                title="Top"
+              >
+                ⬆️
+              </button>
+            </div>
+          </div>
         </div>
-
-        {/* Divider */}
-        <div className="mx-1 h-8 w-px bg-white/10" />
-
-        {/* Premium Top button (fixed size, doesn’t stretch) */}
-        <button
-          type="button"
-          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-          className={cn(
-            "inline-flex h-11 w-11 items-center justify-center rounded-2xl",
-            "border border-white/10 bg-white/5 text-zinc-200",
-            "hover:bg-white/10 active:scale-[0.99] transition"
-          )}
-          title="Top"
-        >
-          ⬆️
-        </button>
-      </div>
-    </div>
-  </div>
-</nav>
-
+      </nav>
 
       {/* Applications modal (Admin) */}
       {appsOpen && (
@@ -2667,10 +2663,7 @@ export default function TgMiniAppPage() {
               </div>
             </div>
 
-            <div
-              className="p-4 overflow-auto"
-              style={{ WebkitOverflowScrolling: "touch" as any }}
-            >
+            <div className="p-4 overflow-auto" style={{ WebkitOverflowScrolling: "touch" as any }}>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex flex-1 items-center gap-2">
                   <input
@@ -2980,4 +2973,3 @@ export default function TgMiniAppPage() {
     </div>
   );
 }
-
