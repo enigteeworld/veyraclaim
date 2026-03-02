@@ -1828,79 +1828,91 @@ export default function TgMiniAppPage() {
                       const tp = typePill(c.type);
                       const min = tierPill(String(c.min_tier || "bronze")).label;
 
-                      return (
-                        <div key={c.id} className="rounded-2xl border border-white/10 bg-black/25 p-4">
-                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                            <div className="min-w-0">
-                              <div className="text-sm font-semibold break-words">{c.title || "Campaign"}</div>
-                              {c.description ? <div className="mt-1 text-sm text-zinc-400 break-words">{c.description}</div> : null}
+                      // === START: USER CAMPAIGN CARD (COLLAPSIBLE) ===
+return (
+  <details key={c.id} className="group rounded-2xl border border-white/10 bg-black/25 p-4">
+    <summary className="cursor-pointer list-none">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold break-words">{c.title || "Campaign"}</div>
 
-                              <div className="mt-2 text-xs text-zinc-500">
-                                Min tier: <span className="font-semibold">{min}</span> · Slots:{" "}
-                                <span className="font-semibold">{formatSlotsText(c)}</span>
-                                {c.starts_at ? (
-                                  <>
-                                    {" "}
-                                    · Starts: <span className="font-mono">{new Date(c.starts_at).toLocaleString()}</span>
-                                  </>
-                                ) : null}
-                                {c.ends_at ? (
-                                  <>
-                                    {" "}
-                                    · Ends: <span className="font-mono">{new Date(c.ends_at).toLocaleString()}</span>
-                                  </>
-                                ) : null}
-                              </div>
+          {c.description ? (
+            <div className="mt-1 text-sm text-zinc-400 break-words line-clamp-2">{c.description}</div>
+          ) : null}
 
-                              {/* Lightweight project profile panel */}
-                              <div className="mt-3 rounded-2xl border border-white/10 bg-white/5 p-3">
-                                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                                  <div className="text-xs font-semibold text-zinc-200">Project profile</div>
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <div className={cn("rounded-full border px-2 py-[2px] text-[11px] font-semibold", tp.cls)}>{tp.label}</div>
-                                    <div className={cn("rounded-full border px-2 py-[2px] text-[11px] font-semibold", st.cls)}>{st.label}</div>
-                                  </div>
-                                </div>
+          <div className="mt-2 text-xs text-zinc-500">
+            Min tier: <span className="font-semibold">{min}</span> · Slots:{" "}
+            <span className="font-semibold">{formatSlotsText(c)}</span>
+            {c.starts_at ? (
+              <>
+                {" "}
+                · Starts: <span className="font-mono">{new Date(c.starts_at).toLocaleString()}</span>
+              </>
+            ) : null}
+            {c.ends_at ? (
+              <>
+                {" "}
+                · Ends: <span className="font-mono">{new Date(c.ends_at).toLocaleString()}</span>
+              </>
+            ) : null}
+          </div>
 
-                                <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                  <div className="rounded-xl border border-white/10 bg-black/25 p-3">
-                                    <div className="text-[11px] text-zinc-500">Title</div>
-                                    <div className="mt-1 truncate text-xs font-semibold text-zinc-200">{c.title || c.code}</div>
-                                  </div>
-                                  <div className="rounded-xl border border-white/10 bg-black/25 p-3">
-                                    <div className="text-[11px] text-zinc-500">Type</div>
-                                    <div className="mt-1 text-xs font-semibold text-zinc-200">{tp.label}</div>
-                                  </div>
-                                  <div className="rounded-xl border border-white/10 bg-black/25 p-3">
-                                    <div className="text-[11px] text-zinc-500">Min tier</div>
-                                    <div className="mt-1 text-xs font-semibold text-zinc-200">{min}</div>
-                                  </div>
-                                  <div className="rounded-xl border border-white/10 bg-black/25 p-3">
-                                    <div className="text-[11px] text-zinc-500">Slots</div>
-                                    <div className="mt-1 text-xs font-semibold text-zinc-200">{formatSlotsText(c)}</div>
-                                  </div>
-                                </div>
+          <div className="mt-2 text-xs text-zinc-500 group-open:hidden">Tap to expand</div>
+        </div>
 
-                                {c.description ? (
-                                  <div className="mt-2 rounded-xl border border-white/10 bg-black/25 p-3">
-                                    <div className="text-[11px] text-zinc-500">Description</div>
-                                    <div className="mt-1 text-xs text-zinc-300">{c.description}</div>
-                                  </div>
-                                ) : null}
-                              </div>
-                            </div>
+        <div className="flex flex-wrap items-center gap-2 sm:shrink-0 sm:flex-col sm:items-end">
+          <div className={cn("rounded-full border px-3 py-1 text-xs font-semibold", tp.cls)}>{tp.label}</div>
+          <div className={cn("rounded-full border px-3 py-1 text-xs font-semibold", st.cls)}>{st.label}</div>
+        </div>
+      </div>
+    </summary>
 
-                            <div className="flex flex-wrap items-center gap-2 sm:shrink-0 sm:flex-col sm:items-end">
-                              <div className={cn("rounded-full border px-3 py-1 text-xs font-semibold", tp.cls)}>{tp.label}</div>
-                              <div className={cn("rounded-full border px-3 py-1 text-xs font-semibold", st.cls)}>{st.label}</div>
-                            </div>
-                          </div>
+    {/* Expanded content */}
+    <div className="mt-3">
+      {/* Lightweight project profile panel */}
+      <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-xs font-semibold text-zinc-200">Project profile</div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className={cn("rounded-full border px-2 py-[2px] text-[11px] font-semibold", tp.cls)}>{tp.label}</div>
+            <div className={cn("rounded-full border px-2 py-[2px] text-[11px] font-semibold", st.cls)}>{st.label}</div>
+          </div>
+        </div>
 
-                          <div className="mt-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-zinc-300">
-                            Request an invite code from the project/admin to join or apply.
-                          </div>
-                        </div>
-                      );
+        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <div className="rounded-xl border border-white/10 bg-black/25 p-3">
+            <div className="text-[11px] text-zinc-500">Title</div>
+            <div className="mt-1 truncate text-xs font-semibold text-zinc-200">{c.title || c.code}</div>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-black/25 p-3">
+            <div className="text-[11px] text-zinc-500">Type</div>
+            <div className="mt-1 text-xs font-semibold text-zinc-200">{tp.label}</div>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-black/25 p-3">
+            <div className="text-[11px] text-zinc-500">Min tier</div>
+            <div className="mt-1 text-xs font-semibold text-zinc-200">{min}</div>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-black/25 p-3">
+            <div className="text-[11px] text-zinc-500">Slots</div>
+            <div className="mt-1 text-xs font-semibold text-zinc-200">{formatSlotsText(c)}</div>
+          </div>
+        </div>
+
+        {c.description ? (
+          <div className="mt-2 rounded-xl border border-white/10 bg-black/25 p-3">
+            <div className="text-[11px] text-zinc-500">Description</div>
+            <div className="mt-1 text-xs text-zinc-300">{c.description}</div>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="mt-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-zinc-300">
+        Request an invite code from the project/admin to join or apply.
+      </div>
+    </div>
+  </details>
+);
+// === END: USER CAMPAIGN CARD (COLLAPSIBLE) ===
                     })}
                   </div>
                 )}
@@ -1973,67 +1985,76 @@ export default function TgMiniAppPage() {
                             const progress =
                               typeof max === "number" && max > 0 ? Math.min(100, Math.round(((filled ?? 0) / max) * 100)) : null;
 
-                            return (
-                              <div key={c.id} className="rounded-2xl border border-white/10 bg-black/25 p-4">
-                                <div className="flex items-start justify-between gap-3">
-                                  <div className="min-w-0">
-                                    <div className="truncate text-sm font-semibold">{c.title || c.code}</div>
-                                    {c.description ? <div className="mt-1 text-sm text-zinc-400">{c.description}</div> : null}
+                           // === START: ADMIN CAMPAIGN CARD (COLLAPSIBLE) ===
+return (
+  <details key={c.id} className="group rounded-2xl border border-white/10 bg-black/25 p-4">
+    <summary className="cursor-pointer list-none">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold">{c.title || c.code}</div>
+          {c.description ? <div className="mt-1 text-sm text-zinc-400 line-clamp-2">{c.description}</div> : null}
 
-                                    <div className="mt-2 text-xs text-zinc-500">
-                                      Code: <span className="font-mono">{c.code}</span> · Min tier:{" "}
-                                      <span className="font-semibold">{min}</span> · Slots:{" "}
-                                      <span className="font-semibold">{formatSlotsText(c)}</span>
-                                    </div>
+          <div className="mt-2 text-xs text-zinc-500">
+            Code: <span className="font-mono">{c.code}</span> · Min tier:{" "}
+            <span className="font-semibold">{min}</span> · Slots:{" "}
+            <span className="font-semibold">{formatSlotsText(c)}</span>
+          </div>
 
-                                    {progress !== null ? (
-                                      <div className="mt-3">
-                                        <div className="h-2 w-full rounded-full bg-white/10">
-                                          <div className="h-2 rounded-full bg-white/40" style={{ width: `${progress}%` }} />
-                                        </div>
-                                        <div className="mt-1 text-[11px] text-zinc-500">{progress}% filled</div>
-                                      </div>
-                                    ) : null}
-                                  </div>
+          {progress !== null ? (
+            <div className="mt-3">
+              <div className="h-2 w-full rounded-full bg-white/10">
+                <div className="h-2 rounded-full bg-white/40" style={{ width: `${progress}%` }} />
+              </div>
+              <div className="mt-1 text-[11px] text-zinc-500">{progress}% filled</div>
+            </div>
+          ) : null}
 
-                                  <div className="flex shrink-0 flex-col items-end gap-2">
-                                    <div className={cn("rounded-full border px-3 py-1 text-xs font-semibold", tp.cls)}>{tp.label}</div>
-                                    <div className={cn("rounded-full border px-3 py-1 text-xs font-semibold", st.cls)}>{st.label}</div>
-                                  </div>
-                                </div>
+          <div className="mt-2 text-xs text-zinc-500 group-open:hidden">Tap to expand</div>
+        </div>
 
-                                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
-  <button
-    type="button"
-    onClick={() => openAppsModal(c)}
-    className="h-11 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 text-sm font-semibold hover:brightness-110 active:scale-[0.99]"
-  >
-    View applicants
-  </button>
+        <div className="flex shrink-0 flex-col items-end gap-2">
+          <div className={cn("rounded-full border px-3 py-1 text-xs font-semibold", tp.cls)}>{tp.label}</div>
+          <div className={cn("rounded-full border px-3 py-1 text-xs font-semibold", st.cls)}>{st.label}</div>
+        </div>
+      </div>
+    </summary>
 
-  <button
-    type="button"
-    onClick={() => exportApplicationsCsv(c)}
-    className="h-11 rounded-xl border border-white/10 bg-white/5 text-sm font-semibold text-zinc-200 hover:bg-white/10 active:scale-[0.99]"
-  >
-    Export CSV
-  </button>
+    {/* Expanded content */}
+    <div className="mt-3">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        <button
+          type="button"
+          onClick={() => openAppsModal(c)}
+          className="h-11 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 text-sm font-semibold hover:brightness-110 active:scale-[0.99]"
+        >
+          View applicants
+        </button>
 
-  <button
-    type="button"
-    onClick={() => deleteCampaign(c)}
-    className="h-11 rounded-xl border border-red-500/25 bg-red-500/10 text-sm font-semibold text-red-200 hover:bg-red-500/15 active:scale-[0.99]"
-  >
-    Delete
-  </button>
-</div>
+        <button
+          type="button"
+          onClick={() => exportApplicationsCsv(c)}
+          className="h-11 rounded-xl border border-white/10 bg-white/5 text-sm font-semibold text-zinc-200 hover:bg-white/10 active:scale-[0.99]"
+        >
+          Export CSV
+        </button>
 
-                                <div className="mt-2 text-xs text-zinc-500">
-                                  Share the code in Telegram. Users will run{" "}
-                                  <span className="font-mono">{c.type === "ambassador" ? `/apply ${c.code}` : `/join ${c.code}`}</span>.
-                                </div>
-                              </div>
-                            );
+        <button
+          type="button"
+          onClick={() => deleteCampaign(c)}
+          className="h-11 rounded-xl border border-red-500/25 bg-red-500/10 text-sm font-semibold text-red-200 hover:bg-red-500/15 active:scale-[0.99]"
+        >
+          Delete
+        </button>
+      </div>
+
+      <div className="mt-2 text-xs text-zinc-500">
+        Share the code in Telegram. Users will run{" "}
+        <span className="font-mono">{c.type === "ambassador" ? `/apply ${c.code}` : `/join ${c.code}`}</span>.
+      </div>
+    </div>
+  </details>
+);
+// === END: ADMIN CAMPAIGN CARD (COLLAPSIBLE) ===
                           })}
                         </div>
                       )}
