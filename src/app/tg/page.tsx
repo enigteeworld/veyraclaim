@@ -1257,6 +1257,59 @@ export default function TgMiniAppPage() {
     }
   }
 
+  // Admin: delete campaign
+  async function deleteCampaign(c: Campaign) {
+    if (!adminSession?.sid) {
+      getTg()?.showAlert?.("Admin session missing. Reopen Admin Panel from the bot and try again.");
+      return;
+    }
+    if (!c?.id) {
+      getTg()?.showAlert?.("Missing campaign id.");
+      return;
+    }
+
+    const ok = window.confirm(
+      `Delete this campaign?\n\n${c.title || c.code}\n\nThis cannot be undone.`
+    );
+    if (!ok) return;
+
+    try {
+      setCampErr("");
+      setCampLoading(true);
+
+      const res = await fetch(`/api/tg/admin/campaigns/${encodeURIComponent(c.id)}`, {
+        method: "DELETE",
+        headers: {
+          "content-type": "application/json",
+          "x-app-sid": adminSession.sid,
+          "x-admin-sid": adminSession.sid,
+        },
+      });
+
+      const j = await res.json().catch(() => null) as any;
+
+      if (!res.ok || !j?.ok) {
+        const msg = j?.error || `Delete failed (${res.status})`;
+        throw new Error(msg);
+      }
+
+      // Optimistic UI: remove deleted campaign locally
+      setCampaigns((prev) => prev.filter((x) => x.id !== c.id));
+
+      getTg()?.HapticFeedback?.notificationOccurred?.("success");
+      getTg()?.showAlert?.("✅ Campaign deleted");
+    } catch (e: any) {
+      const msg = e?.message || "Delete failed.";
+      setCampErr(msg);
+      getTg()?.HapticFeedback?.notificationOccurred?.("error");
+      getTg()?.showAlert?.(msg);
+    } finally {
+      setCampLoading(false);
+    }
+  }
+  //Admin Delete campaign section end
+
+
   const sortedFilteredApps = useMemo(() => {
     const q = (appsQuery || "").trim().toLowerCase();
     let list = apps.slice();
@@ -1949,23 +2002,31 @@ export default function TgMiniAppPage() {
                                   </div>
                                 </div>
 
-                                <div className="mt-3 grid grid-cols-2 gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => openAppsModal(c)}
-                                    className="h-11 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 text-sm font-semibold hover:brightness-110 active:scale-[0.99]"
-                                  >
-                                    View applicants
-                                  </button>
+                                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+  <button
+    type="button"
+    onClick={() => openAppsModal(c)}
+    className="h-11 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 text-sm font-semibold hover:brightness-110 active:scale-[0.99]"
+  >
+    View applicants
+  </button>
 
-                                  <button
-                                    type="button"
-                                    onClick={() => exportApplicationsCsv(c)}
-                                    className="h-11 rounded-xl border border-white/10 bg-white/5 text-sm font-semibold text-zinc-200 hover:bg-white/10 active:scale-[0.99]"
-                                  >
-                                    Export CSV
-                                  </button>
-                                </div>
+  <button
+    type="button"
+    onClick={() => exportApplicationsCsv(c)}
+    className="h-11 rounded-xl border border-white/10 bg-white/5 text-sm font-semibold text-zinc-200 hover:bg-white/10 active:scale-[0.99]"
+  >
+    Export CSV
+  </button>
+
+  <button
+    type="button"
+    onClick={() => deleteCampaign(c)}
+    className="h-11 rounded-xl border border-red-500/25 bg-red-500/10 text-sm font-semibold text-red-200 hover:bg-red-500/15 active:scale-[0.99]"
+  >
+    Delete
+  </button>
+</div>
 
                                 <div className="mt-2 text-xs text-zinc-500">
                                   Share the code in Telegram. Users will run{" "}
