@@ -36,7 +36,7 @@ async function authFromAdminSession(req: Request) {
 async function requireAdmin(telegram_user_id: number, project_id: string) {
   const { data, error } = await supabaseAdmin
     .from("project_admins")
-    .select("id")
+    .select("project_id")
     .eq("telegram_user_id", telegram_user_id)
     .eq("project_id", project_id)
     .maybeSingle();
