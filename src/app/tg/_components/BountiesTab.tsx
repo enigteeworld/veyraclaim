@@ -4,31 +4,92 @@
 import { useEffect, useMemo, useState } from "react";
 import { useBounties, type Bounty } from "../_hooks/useBounties";
 
+type AppQuestion =
+  | { id: string; type: "text"; label: string; required?: boolean; placeholder?: string; maxLen?: number }
+  | { id: string; type: "textarea"; label: string; required?: boolean; placeholder?: string; maxLen?: number }
+  | { id: string; type: "select"; label: string; required?: boolean; options: string[] };
+
+type BountyApplySession = {
+  sid: string;
+  bounty: {
+    id: string;
+    title?: string | null;
+    description?: string | null;
+    instructions?: string | null;
+    min_tier?: string | null;
+    reward?: number | null;
+    currency?: string | null;
+    starts_at?: string | null;
+    ends_at?: string | null;
+    status?: string | null;
+    link_url?: string | null;
+    max_winners?: number | null;
+    questions?: AppQuestion[];
+  };
+  profile: { wallet: string; tier: string; fairscore: number | null };
+};
+
+function cn(...xs: Array<string | false | null | undefined>) {
+  return xs.filter(Boolean).join(" ");
+}
+
+function getTg() {
+  // @ts-ignore
+  return typeof window !== "undefined" ? window.Telegram?.WebApp : undefined;
+}
+
+/** Ensure Telegram WebApp script is loaded (fixes missing initData on some clients) */
+function ensureTelegramScript(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof window === "undefined") return resolve();
+
+    // @ts-ignore
+    if (window.Telegram?.WebApp) return resolve();
+
+    const existing = document.querySelector('script[data-tg-webapp="1"]') as HTMLScriptElement | null;
+    if (existing) {
+      existing.addEventListener("load", () => resolve());
+      existing.addEventListener("error", () => resolve());
+      return;
+    }
+
+    const s = document.createElement("script");
+    s.src = "https://telegram.org/js/telegram-web-app.js";
+    s.async = true;
+    s.defer = true;
+    // @ts-ignore
+    s.dataset.tgWebapp = "1";
+    s.onload = () => resolve();
+    s.onerror = () => resolve();
+    document.head.appendChild(s);
+  });
+}
+
+function tgInitHeaders(initData: string) {
+  const id = (initData || "").toString();
+  if (!id) return {};
+  return {
+    "x-tg-initdata": id,
+    "x-tg-init-data": id,
+    "x-telegram-initdata": id,
+    "x-telegram-init-data": id,
+  } as Record<string, string>;
+}
+
 function pillBase(cls: string) {
   return `rounded-full border px-3 py-1 text-xs font-semibold ${cls}`;
 }
 
 function statusPill(status?: string | null) {
   const s = (status || "open").toLowerCase();
-  if (s === "open")
-    return {
-      label: "OPEN",
-      cls: "border-emerald-500/25 bg-emerald-500/10 text-emerald-200",
-    };
-  if (s === "paused")
-    return {
-      label: "PAUSED",
-      cls: "border-yellow-500/25 bg-yellow-500/10 text-yellow-200",
-    };
-  return {
-    label: "CLOSED",
-    cls: "border-red-500/25 bg-red-500/10 text-red-200",
-  };
+  if (s === "open") return { label: "OPEN", cls: "border-emerald-500/25 bg-emerald-500/10 text-emerald-200" };
+  if (s === "paused") return { label: "PAUSED", cls: "border-yellow-500/25 bg-yellow-500/10 text-yellow-200" };
+  return { label: "CLOSED", cls: "border-red-500/25 bg-red-500/10 text-red-200" };
 }
 
-function fmtReward(b: Bounty) {
-  const r = (b.reward ?? "").toString().trim();
-  const c = (b.currency ?? "USDC").toString().trim();
+function fmtReward(b: any) {
+  const r = (b?.reward ?? "").toString().trim();
+  const c = (b?.currency ?? "USDC").toString().trim();
   if (!r) return null;
   return `${r} ${c}`;
 }
@@ -40,171 +101,48 @@ function fmtDt(s?: string | null) {
   return d.toLocaleString();
 }
 
-function normTier(t?: string | null) {
-  const v = (t || "").toString().trim().toLowerCase();
-  return v || null;
-}
-
-function tierRank(t?: string | null) {
-  const v = normTier(t);
-  // adjust if you have different tier names
-  const order = ["bronze", "silver", "gold", "platinum", "diamond"];
-  const idx = v ? order.indexOf(v) : -1;
-  return idx >= 0 ? idx : -1;
-}
-
-function tierMeets(userTier?: string | null, minTier?: string | null) {
-  const u = tierRank(userTier);
-  const m = tierRank(minTier);
-  if (m < 0) return true; // no min tier configured
-  if (u < 0) return false; // user tier unknown
-  return u >= m;
-}
-
-function safeGetLS(key: string) {
+function safeStringify(v: any) {
   try {
-    return localStorage.getItem(key);
+    if (v === null || v === undefined) return "";
+    if (typeof v === "string") return v;
+    return JSON.stringify(v);
   } catch {
-    return null;
+    return String(v ?? "");
   }
 }
 
-function safeSetLS(key: string, val: string) {
-  try {
-    localStorage.setItem(key, val);
-  } catch {}
-}
-
-function getAnyLS(keys: string[]) {
-  for (const k of keys) {
-    const v = safeGetLS(k);
-    if (v && v.trim()) return v.trim();
-  }
-  return null;
-}
-
-export default function BountiesTab({
-  initData,
-  sid,
-}: {
-  initData?: string | null;
-  sid?: string | null;
-}) {
+export default function BountiesTab({ initData, sid }: { initData?: string | null; sid?: string | null }) {
   const { loading, err, list, refresh } = useBounties({ initData, sid });
 
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selected, setSelected] = useState<Bounty | null>(null);
 
-  // --- profile + tier hydration (wallet comes from /api/tg/me or cached) ---
-  const [profileLoading, setProfileLoading] = useState(false);
-  const [profileErr, setProfileErr] = useState<string | null>(null);
-  const [savedWallet, setSavedWallet] = useState<string | null>(null);
-  const [userTier, setUserTier] = useState<string | null>(null);
-
-  // localStorage fallback keys (so this works even if /me isn’t populated yet)
-  const WALLET_KEYS = useMemo(
-    () => [
-      "veyra:saved_wallet",
-      "saved_wallet",
-      "telegram_saved_wallet",
-      "tg_saved_wallet",
-      "wallet",
-      "tg_wallet",
-      "verified_wallet",
-    ],
-    []
-  );
-
-  const TIER_KEYS = useMemo(
-    () => [
-      "veyra:tier",
-      "eligibility:tier",
-      "tier",
-      "fair_tier",
-      "eligibility_tier",
-      "veyra:eligibility_tier",
-    ],
-    []
-  );
-
-  // Load cached wallet/tier immediately (fast UI)
-  useEffect(() => {
-    const w = getAnyLS(WALLET_KEYS);
-    if (w) setSavedWallet(w);
-
-    const t = getAnyLS(TIER_KEYS);
-    if (t) setUserTier(t);
-  }, [WALLET_KEYS, TIER_KEYS]);
-
-  // Hydrate wallet from /api/tg/me (authoritative for “verified in bot”)
-  useEffect(() => {
-    const id = (initData || "").trim();
-    if (!id) return;
-
-    let cancelled = false;
-
-    (async () => {
-      setProfileLoading(true);
-      setProfileErr(null);
-
-      try {
-        const res = await fetch("/api/tg/me", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ initData: id }),
-          cache: "no-store",
-        });
-
-        const json = await res.json().catch(() => ({} as any));
-        if (!res.ok || json?.ok === false) {
-          // 401/405/500 etc
-          throw new Error(json?.error || `Failed to load profile (${res.status})`);
-        }
-
-        const w = String(json?.data?.saved_wallet || "").trim();
-        if (!cancelled) {
-          if (w) {
-            setSavedWallet(w);
-            safeSetLS("veyra:saved_wallet", w);
-          }
-        }
-      } catch (e: any) {
-        if (!cancelled) setProfileErr(e?.message || "Failed to load profile");
-      } finally {
-        if (!cancelled) setProfileLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [initData]);
-
-  // If tier becomes available later (e.g. user visits Check tab), pick it up
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const t = getAnyLS(TIER_KEYS);
-      if (t && t !== userTier) setUserTier(t);
-      const w = getAnyLS(WALLET_KEYS);
-      if (w && w !== savedWallet) setSavedWallet(w);
-    }, 1200);
-
-    return () => clearInterval(interval);
-  }, [TIER_KEYS, WALLET_KEYS, userTier, savedWallet]);
+  // Apply flow state
+  const [applyOpen, setApplyOpen] = useState(false);
+  const [applyLoading, setApplyLoading] = useState(false);
+  const [applyErr, setApplyErr] = useState<string>("");
+  const [applyOk, setApplyOk] = useState<string>("");
+  const [applySession, setApplySession] = useState<BountyApplySession | null>(null);
+  const [answers, setAnswers] = useState<Record<string, string>>({});
 
   const sorted = useMemo(() => {
     return (list || [])
       .slice()
-      .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+      .sort((a: any, b: any) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
   }, [list]);
+
+  async function getBestInitData(): Promise<string> {
+    await ensureTelegramScript();
+    const tg = getTg();
+    const id = (tg?.initData || initData || "").toString();
+    return id;
+  }
 
   function openDetails(b: Bounty) {
     setSelected(b);
     setDetailsOpen(true);
-
     try {
-      // @ts-ignore
-      window?.Telegram?.WebApp?.HapticFeedback?.impactOccurred?.("light");
+      getTg()?.HapticFeedback?.impactOccurred?.("light");
     } catch {}
   }
 
@@ -213,73 +151,114 @@ export default function BountiesTab({
     setTimeout(() => setSelected(null), 120);
   }
 
+  function closeApply() {
+    setApplyOpen(false);
+    setApplyErr("");
+    setApplyOk("");
+    setApplySession(null);
+    setAnswers({});
+  }
+
+  async function startApply(b: any) {
+    setApplyErr("");
+    setApplyOk("");
+    setApplyLoading(true);
+    setApplySession(null);
+    setAnswers({});
+
+    try {
+      const id = await getBestInitData();
+      if (!id) throw new Error("Telegram initData missing. Reopen the mini app.");
+
+      const res = await fetch("/api/tg/bounty/session", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...tgInitHeaders(id) },
+        body: JSON.stringify({
+          bounty_id: b?.id,
+          initData: id,
+          init_data: id,
+          initDataRaw: id,
+        }),
+      });
+
+      const j = (await res.json().catch(() => null)) as any;
+      if (!res.ok || !j?.ok) {
+        throw new Error(j?.error || `Could not start apply (${res.status})`);
+      }
+
+      const session = j.data as BountyApplySession;
+      setApplySession(session);
+
+      const qs = (session?.bounty?.questions || []) as AppQuestion[];
+      const init: Record<string, string> = {};
+      for (const q of qs) init[q.id] = "";
+      setAnswers(init);
+
+      setApplyOpen(true);
+      getTg()?.HapticFeedback?.notificationOccurred?.("success");
+    } catch (e: any) {
+      setApplyErr(e?.message || "Could not start apply.");
+      getTg()?.HapticFeedback?.notificationOccurred?.("error");
+    } finally {
+      setApplyLoading(false);
+    }
+  }
+
+  async function submitBountyApplication() {
+    if (!applySession?.sid) return;
+
+    setApplyErr("");
+    setApplyOk("");
+    setApplyLoading(true);
+
+    try {
+      // Basic client validation (required + maxLen)
+      const qs = (applySession?.bounty?.questions || []) as AppQuestion[];
+      for (const q of qs) {
+        const v = (answers[q.id] || "").trim();
+        const required = q.required !== false;
+        if (required && !v) throw new Error(`Please answer: ${q.label}`);
+        if (typeof (q as any).maxLen === "number" && v.length > (q as any).maxLen) {
+          throw new Error(`Too long: ${q.label} (max ${(q as any).maxLen})`);
+        }
+      }
+
+      const id = await getBestInitData();
+      if (!id) throw new Error("Telegram initData missing. Reopen the mini app.");
+
+      const res = await fetch("/api/tg/bounty/submit", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...tgInitHeaders(id) },
+        body: JSON.stringify({
+          sid: applySession.sid,
+          initData: id,
+          init_data: id,
+          initDataRaw: id,
+          answers,
+        }),
+      });
+
+      const j = (await res.json().catch(() => null)) as any;
+      if (!res.ok || !j?.ok) {
+        throw new Error(j?.error || `Submit failed (${res.status})`);
+      }
+
+      setApplyOk(j?.message || "✅ Submitted");
+      getTg()?.HapticFeedback?.notificationOccurred?.("success");
+
+      // Optionally close after a short delay
+      setTimeout(() => closeApply(), 700);
+    } catch (e: any) {
+      setApplyErr(e?.message || "Failed to submit.");
+      getTg()?.HapticFeedback?.notificationOccurred?.("error");
+    } finally {
+      setApplyLoading(false);
+    }
+  }
+
   const selectedAny = selected as any;
   const sPill = statusPill(selected?.status);
   const rewardText = selected ? fmtReward(selected) : null;
-
-  const startsTxt = fmtDt(selectedAny?.starts_at);
-  const endsTxt = fmtDt(selectedAny?.ends_at);
-
-  const haveWallet = Boolean(savedWallet);
-  const haveTier = Boolean(normTier(userTier));
-  const canAttemptApply = haveWallet && haveTier;
-
-  function applyLabelFor(minTier?: string | null) {
-    if (!haveWallet) return "Verify wallet to apply";
-    if (!haveTier) return "Check eligibility to apply";
-    if (!tierMeets(userTier, minTier)) return `Requires ${minTier || "higher"} tier`;
-    return "Apply";
-  }
-
-  function applyDisabledFor(b: any) {
-    if (!haveWallet) return true;
-    if (!haveTier) return true;
-    if (!tierMeets(userTier, b?.min_tier)) return true;
-    return false;
-  }
-
-  function onApplyClick(b: any) {
-    // B (Apply flow) will replace this handler with the real flow.
-    // For now: give correct feedback depending on what’s missing.
-    if (!haveWallet) {
-      try {
-        // @ts-ignore
-        window?.Telegram?.WebApp?.showAlert?.("No verified wallet yet. Verify inside the bot, then reopen the mini app.");
-      } catch {
-        alert("No verified wallet yet. Verify inside the bot, then reopen the mini app.");
-      }
-      return;
-    }
-
-    if (!haveTier) {
-      try {
-        // @ts-ignore
-        window?.Telegram?.WebApp?.showAlert?.("Tier not loaded yet. Open the Check tab once (or tap Check now) to hydrate tier.");
-      } catch {
-        alert("Tier not loaded yet. Open the Check tab once (or tap Check now) to hydrate tier.");
-      }
-      return;
-    }
-
-    if (!tierMeets(userTier, b?.min_tier)) {
-      try {
-        // @ts-ignore
-        window?.Telegram?.WebApp?.showAlert?.(
-          `This bounty requires at least ${b?.min_tier}. Your tier is ${userTier || "unknown"}.`
-        );
-      } catch {
-        alert(`This bounty requires at least ${b?.min_tier}. Your tier is ${userTier || "unknown"}.`);
-      }
-      return;
-    }
-
-    try {
-      // @ts-ignore
-      window?.Telegram?.WebApp?.showAlert?.("Apply flow is next (we’re wiring it now).");
-    } catch {
-      alert("Apply flow is next (we’re wiring it now).");
-    }
-  }
 
   return (
     <>
@@ -289,22 +268,7 @@ export default function BountiesTab({
           <div className="min-w-0">
             <div className="text-base font-semibold">🎯 Bounties</div>
             <div className="mt-1 text-sm text-zinc-400">
-              Limited-time bounties with winners, badges, and referrals. (Apply is verified-wallet + tier-gated.)
-            </div>
-
-            {/* small status line */}
-            <div className="mt-2 text-xs text-zinc-400">
-              {profileLoading ? (
-                <>Loading profile…</>
-              ) : profileErr ? (
-                <span className="text-yellow-200">{profileErr}</span>
-              ) : !haveWallet ? (
-                <>No verified wallet yet — verify in the bot to apply.</>
-              ) : !haveTier ? (
-                <>Tier not loaded yet — open Check tab once to hydrate tier.</>
-              ) : (
-                <>Wallet + tier ready.</>
-              )}
+              Limited-time bounties with winners, badges, and referrals. Apply is verified-wallet + tier-gated.
             </div>
           </div>
 
@@ -317,55 +281,49 @@ export default function BountiesTab({
           </button>
         </div>
 
-        {loading && (
-          <div className="mt-4 rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-zinc-300">
-            Loading bounties…
-          </div>
-        )}
-
-        {err && (
+        {err ? (
           <div className="mt-4 rounded-xl border border-yellow-500/25 bg-yellow-500/10 px-3 py-3 text-sm text-yellow-200">
             {err}
           </div>
-        )}
+        ) : null}
 
-        {!loading && !err && sorted.length === 0 && (
+        {loading ? (
+          <div className="mt-4 rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-zinc-300">Loading bounties…</div>
+        ) : null}
+
+        {!loading && !err && sorted.length === 0 ? (
           <div className="mt-4 rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-zinc-300">
             No bounties yet.
           </div>
-        )}
+        ) : null}
 
-        {!loading && !err && sorted.length > 0 && (
+        {!loading && !err && sorted.length > 0 ? (
           <div className="mt-4 space-y-3">
-            {sorted.map((b) => {
-              const anyB = b as any;
+            {sorted.map((b: any) => {
               const sp = statusPill(b.status);
               const r = fmtReward(b);
-
-              const postedBy = (anyB?.posted_by_name || "Veyra").toString();
-
-              const applyDisabled = applyDisabledFor(anyB);
-              const applyLabel = applyLabelFor(anyB?.min_tier);
 
               return (
                 <div key={b.id} className="rounded-2xl border border-white/10 bg-black/25 p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="text-sm font-semibold break-words">{b.title || "Bounty"}</div>
-                      {b.description ? (
-                        <div className="mt-1 text-sm text-zinc-400 break-words">{b.description}</div>
-                      ) : null}
+                      {b.description ? <div className="mt-1 text-sm text-zinc-400 break-words">{b.description}</div> : null}
 
                       <div className="mt-2 text-xs text-zinc-500">
                         Code: <span className="font-mono">{b.code}</span>
                         {b.min_tier ? (
                           <>
                             {" "}
-                            · Min tier: <span className="font-semibold">{b.min_tier}</span>
+                            · Min tier: <span className="font-semibold">{String(b.min_tier)}</span>
                           </>
                         ) : null}
-                        {" "}
-                        · Posted by: <span className="font-semibold">{postedBy}</span>
+                        {b.posted_by_name ? (
+                          <>
+                            {" "}
+                            · Posted by: <span className="font-semibold">{String(b.posted_by_name)}</span>
+                          </>
+                        ) : null}
                       </div>
                     </div>
 
@@ -375,9 +333,7 @@ export default function BountiesTab({
                   </div>
 
                   {r ? (
-                    <div className="mt-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-zinc-100">
-                      {r}
-                    </div>
+                    <div className="mt-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-zinc-100">{r}</div>
                   ) : null}
 
                   <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -391,30 +347,27 @@ export default function BountiesTab({
 
                     <button
                       type="button"
-                      disabled={applyDisabled}
-                      onClick={() => onApplyClick(anyB)}
-                      className={[
+                      disabled={applyLoading}
+                      onClick={() => startApply(b)}
+                      className={cn(
                         "h-11 rounded-xl text-sm font-semibold active:scale-[0.99]",
-                        applyDisabled
-                          ? "border border-white/10 bg-white/5 text-zinc-400"
-                          : "bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:brightness-110",
-                      ].join(" ")}
+                        applyLoading ? "border border-white/10 bg-white/5 text-zinc-400" : "bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:brightness-110"
+                      )}
                     >
-                      {applyDisabled ? applyLabel : "Apply (next)"}
+                      {applyLoading ? "Starting…" : "Apply"}
                     </button>
                   </div>
                 </div>
               );
             })}
           </div>
-        )}
+        ) : null}
       </div>
       {/* === END: BOUNTIES_PANEL === */}
 
       {/* === START: BOUNTY_DETAILS_SHEET === */}
       {detailsOpen && selected ? (
         <div className="fixed inset-0 z-[80]">
-          {/* backdrop */}
           <button
             type="button"
             aria-label="Close details"
@@ -422,30 +375,23 @@ export default function BountiesTab({
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
           />
 
-          {/* sheet */}
           <div className="absolute bottom-0 left-0 right-0 mx-auto w-full max-w-3xl">
             <div className="rounded-t-3xl border border-white/10 bg-[#070A0D]/95 p-4 shadow-2xl">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-base font-semibold break-words">{selected.title || "Bounty"}</div>
-
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <div className={pillBase(sPill.cls)}>{sPill.label}</div>
-
-                    {selected.min_tier ? (
+                    {selectedAny?.min_tier ? (
                       <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-200">
-                        Min tier: {selected.min_tier}
+                        Min tier: {String(selectedAny.min_tier)}
                       </div>
                     ) : null}
-
-                    <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-200">
-                      Code: <span className="font-mono">{selected.code}</span>
-                    </div>
-
-                    <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-200">
-                      Posted by:{" "}
-                      <span className="font-semibold">{String((selectedAny?.posted_by_name || "Veyra") ?? "Veyra")}</span>
-                    </div>
+                    {selectedAny?.code ? (
+                      <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-200">
+                        Code: <span className="font-mono">{String(selectedAny.code)}</span>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
 
@@ -458,12 +404,7 @@ export default function BountiesTab({
                 </button>
               </div>
 
-              {/* scrollable body */}
-              <div
-                className="mt-3 max-h-[70vh] overflow-y-auto overscroll-contain pb-4"
-                style={{ WebkitOverflowScrolling: "touch" } as any}
-              >
-                {/* ABOUT */}
+              <div className="mt-3 max-h-[70vh] overflow-y-auto overscroll-contain pb-4" style={{ WebkitOverflowScrolling: "touch" as any }}>
                 {selected.description ? (
                   <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
                     <div className="text-[11px] text-zinc-500">About</div>
@@ -471,23 +412,13 @@ export default function BountiesTab({
                   </div>
                 ) : null}
 
-                {/* WHAT TO DO */}
-                {selectedAny?.how_to ? (
+                {selectedAny?.instructions ? (
                   <div className="mt-2 rounded-2xl border border-white/10 bg-black/25 p-3">
-                    <div className="text-[11px] text-zinc-500">What you need to do</div>
-                    <div className="mt-1 whitespace-pre-wrap text-sm text-zinc-300">{String(selectedAny.how_to)}</div>
+                    <div className="text-[11px] text-zinc-500">Instructions</div>
+                    <div className="mt-1 whitespace-pre-wrap text-sm text-zinc-300">{String(selectedAny.instructions)}</div>
                   </div>
                 ) : null}
 
-                {/* RULES */}
-                {selectedAny?.rules ? (
-                  <div className="mt-2 rounded-2xl border border-white/10 bg-black/25 p-3">
-                    <div className="text-[11px] text-zinc-500">Rules / judging</div>
-                    <div className="mt-1 whitespace-pre-wrap text-sm text-zinc-300">{String(selectedAny.rules)}</div>
-                  </div>
-                ) : null}
-
-                {/* META GRID */}
                 <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
                     <div className="text-[11px] text-zinc-500">Reward</div>
@@ -503,20 +434,15 @@ export default function BountiesTab({
 
                   <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
                     <div className="text-[11px] text-zinc-500">Starts</div>
-                    <div className="mt-1 text-sm font-semibold text-zinc-100">{startsTxt || "—"}</div>
+                    <div className="mt-1 text-sm font-semibold text-zinc-100">{fmtDt(selectedAny?.starts_at) || "—"}</div>
                   </div>
 
                   <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
                     <div className="text-[11px] text-zinc-500">Ends</div>
-                    <div className="mt-1 text-sm font-semibold text-zinc-100">{endsTxt || "—"}</div>
+                    <div className="mt-1 text-sm font-semibold text-zinc-100">{fmtDt(selectedAny?.ends_at) || "—"}</div>
                   </div>
 
-                  <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
-                    <div className="text-[11px] text-zinc-500">Published</div>
-                    <div className="mt-1 text-sm font-semibold text-zinc-100">{selected.published ? "Yes" : "No"}</div>
-                  </div>
-
-                  <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
+                  <div className="rounded-2xl border border-white/10 bg-black/25 p-3 sm:col-span-2">
                     <div className="text-[11px] text-zinc-500">Link</div>
                     {selectedAny?.link_url ? (
                       <a
@@ -533,20 +459,17 @@ export default function BountiesTab({
                   </div>
                 </div>
 
-                {/* ACTIONS */}
                 <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <button
                     type="button"
-                    disabled={applyDisabledFor(selectedAny)}
-                    onClick={() => onApplyClick(selectedAny)}
-                    className={[
+                    disabled={applyLoading}
+                    onClick={() => startApply(selectedAny)}
+                    className={cn(
                       "h-12 rounded-2xl text-sm font-semibold active:scale-[0.99]",
-                      applyDisabledFor(selectedAny)
-                        ? "border border-white/10 bg-white/5 text-zinc-400"
-                        : "bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:brightness-110",
-                    ].join(" ")}
+                      applyLoading ? "border border-white/10 bg-white/5 text-zinc-400" : "bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:brightness-110"
+                    )}
                   >
-                    {applyDisabledFor(selectedAny) ? applyLabelFor(selectedAny?.min_tier) : "Apply (next)"}
+                    {applyLoading ? "Starting…" : "Apply"}
                   </button>
 
                   <button
@@ -558,12 +481,172 @@ export default function BountiesTab({
                   </button>
                 </div>
               </div>
-              {/* end scroll body */}
             </div>
           </div>
         </div>
       ) : null}
       {/* === END: BOUNTY_DETAILS_SHEET === */}
+
+      {/* === START: APPLY_SHEET === */}
+      {applyOpen && applySession ? (
+        <div className="fixed inset-0 z-[90]">
+          <button type="button" aria-label="Close apply" onClick={closeApply} className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+
+          <div className="absolute bottom-0 left-0 right-0 mx-auto w-full max-w-3xl">
+            <div className="rounded-t-3xl border border-white/10 bg-[#070A0D]/95 p-4 shadow-2xl">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-base font-semibold break-words">{applySession.bounty.title || "Bounty application"}</div>
+                  <div className="mt-1 text-xs text-zinc-500">
+                    Wallet: <span className="font-mono">{applySession.profile.wallet}</span> · Tier:{" "}
+                    <span className="font-semibold">{applySession.profile.tier}</span>
+                    {typeof applySession.profile.fairscore === "number" ? (
+                      <>
+                        {" "}
+                        · FairScore: <span className="font-mono">{applySession.profile.fairscore.toFixed(1)}</span>
+                      </>
+                    ) : null}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={closeApply}
+                  className="h-10 rounded-2xl border border-white/10 bg-white/5 px-4 text-xs font-semibold text-zinc-200 hover:bg-white/10"
+                >
+                  Close
+                </button>
+              </div>
+
+              {applyErr ? (
+                <div className="mt-3 rounded-xl border border-red-500/25 bg-red-500/10 px-3 py-2 text-sm text-red-200">{applyErr}</div>
+              ) : null}
+
+              {applyOk ? (
+                <div className="mt-3 rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">{applyOk}</div>
+              ) : null}
+
+              <div className="mt-3 max-h-[70vh] overflow-y-auto overscroll-contain pb-4" style={{ WebkitOverflowScrolling: "touch" as any }}>
+                {applySession.bounty.instructions ? (
+                  <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
+                    <div className="text-[11px] text-zinc-500">Instructions</div>
+                    <div className="mt-1 whitespace-pre-wrap text-sm text-zinc-300">{applySession.bounty.instructions}</div>
+                  </div>
+                ) : null}
+
+                <div className="mt-3 space-y-3">
+                  {((applySession.bounty.questions || []) as AppQuestion[]).length === 0 ? (
+                    <div className="rounded-xl border border-yellow-500/25 bg-yellow-500/10 px-3 py-3 text-sm text-yellow-200">
+                      No application questions configured for this bounty.
+                    </div>
+                  ) : (
+                    (applySession.bounty.questions || []).map((q) => {
+                      const v = answers[q.id] ?? "";
+                      const required = q.required !== false;
+
+                      if (q.type === "select") {
+                        return (
+                          <label key={q.id} className="block">
+                            <div className="mb-1 text-xs text-zinc-400">
+                              {q.label} {required ? <span className="text-red-300">*</span> : null}
+                            </div>
+                            <select
+                              value={v}
+                              onChange={(e) => setAnswers((p) => ({ ...p, [q.id]: e.target.value }))}
+                              className={cn(
+                                "h-12 w-full rounded-2xl border bg-black/30 px-4 text-sm outline-none",
+                                "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
+                              )}
+                            >
+                              <option value="">Select…</option>
+                              {(q.options || []).map((opt) => (
+                                <option key={opt} value={opt}>
+                                  {opt}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        );
+                      }
+
+                      if (q.type === "textarea") {
+                        return (
+                          <label key={q.id} className="block">
+                            <div className="mb-1 text-xs text-zinc-400">
+                              {q.label} {required ? <span className="text-red-300">*</span> : null}
+                            </div>
+                            <textarea
+                              value={v}
+                              onChange={(e) => setAnswers((p) => ({ ...p, [q.id]: e.target.value }))}
+                              rows={4}
+                              placeholder={q.placeholder || "Type your answer…"}
+                              className={cn(
+                                "w-full rounded-2xl border bg-black/30 px-4 py-3 text-sm outline-none",
+                                "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
+                              )}
+                              maxLength={typeof q.maxLen === "number" ? q.maxLen : undefined}
+                            />
+                            {typeof q.maxLen === "number" ? (
+                              <div className="mt-1 text-xs text-zinc-500">
+                                {Math.min(v.length, q.maxLen)}/{q.maxLen}
+                              </div>
+                            ) : null}
+                          </label>
+                        );
+                      }
+
+                      return (
+                        <label key={q.id} className="block">
+                          <div className="mb-1 text-xs text-zinc-400">
+                            {q.label} {required ? <span className="text-red-300">*</span> : null}
+                          </div>
+                          <input
+                            value={v}
+                            onChange={(e) => setAnswers((p) => ({ ...p, [q.id]: e.target.value }))}
+                            placeholder={q.placeholder || "Type your answer…"}
+                            className={cn(
+                              "h-12 w-full rounded-2xl border bg-black/30 px-4 text-sm outline-none",
+                              "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
+                            )}
+                            maxLength={typeof q.maxLen === "number" ? q.maxLen : undefined}
+                          />
+                          {typeof q.maxLen === "number" ? (
+                            <div className="mt-1 text-xs text-zinc-500">
+                              {Math.min(v.length, q.maxLen)}/{q.maxLen}
+                            </div>
+                          ) : null}
+                        </label>
+                      );
+                    })
+                  )}
+
+                  <button
+                    type="button"
+                    disabled={applyLoading}
+                    onClick={submitBountyApplication}
+                    className={cn(
+                      "h-12 w-full rounded-2xl text-sm font-semibold",
+                      "bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:brightness-110 active:scale-[0.99]",
+                      applyLoading && "opacity-70"
+                    )}
+                  >
+                    {applyLoading ? "Submitting…" : "Submit application"}
+                  </button>
+
+                  {/* Debug helper if needed */}
+                  <details className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                    <summary className="cursor-pointer text-xs font-semibold text-zinc-300">Debug</summary>
+                    <pre className="mt-2 max-h-[240px] overflow-auto rounded-xl bg-black/30 p-3 text-xs text-zinc-200">
+                      {safeStringify({ sid: applySession.sid, answers })}
+                    </pre>
+                  </details>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {/* === END: APPLY_SHEET === */}
     </>
   );
 }
