@@ -1,6 +1,8 @@
 // src/app/tg/page.tsx
 "use client";
-
+// === START: IMPORT_BOUNTIES_TAB ===
+import BountiesTab from "./_components/BountiesTab";
+// === END: IMPORT_BOUNTIES_TAB ===
 import { useEffect, useMemo, useRef, useState } from "react";
 
 type FairScaleBadge = {
@@ -208,7 +210,7 @@ function ensureTelegramScript(): Promise<void> {
   });
 }
 
-type Tab = "eligibility" | "reputation" | "campaigns" | "onboarding";
+type Tab = "eligibility" | "reputation" | "bounties" | "campaigns" | "onboarding";
 type AdminCampaignType = "drop" | "allowlist" | "ambassador";
 
 type AdminQuestionDraft = {
@@ -1495,6 +1497,20 @@ export default function TgMiniAppPage() {
               🎯 <span className="hidden sm:inline">Campaigns</span>
               <span className="sm:hidden">Camp</span>
             </button>
+// === START: TAB BUTTON (Bounties) ===
+<button
+  type="button"
+  onClick={() => setTab("bounties")}
+  className={cn(
+    "h-11 rounded-2xl px-4 text-sm font-semibold transition",
+    tab === "bounties"
+      ? "bg-purple-600 text-white"
+      : "border border-white/10 bg-white/5 text-zinc-200 hover:bg-white/10"
+  )}
+>
+  🎯 Bounties
+</button>
+// === END: TAB BUTTON (Bounties) ===
 
             {showAdminTabs && (
               <button
@@ -1510,6 +1526,7 @@ export default function TgMiniAppPage() {
                 🧭 <span className="hidden sm:inline">Onboarding</span>
                 <span className="sm:hidden">Kit</span>
               </button>
+              
             )}
           </div>
         </div>
@@ -1913,6 +1930,9 @@ return (
   </details>
 );
 // === END: USER CAMPAIGN CARD (COLLAPSIBLE) ===
+
+
+
                     })}
                   </div>
                 )}
@@ -2601,6 +2621,9 @@ return (
             ) : null}
           </section>
         )}
+        // === START: TAB_PANEL_BOUNTIES ===
+{tab === "bounties" && <BountiesTab initData={initData} sid={sid} />}
+// === END: TAB_PANEL_BOUNTIES ===
       </main>
 
       {/* Bottom nav */}
