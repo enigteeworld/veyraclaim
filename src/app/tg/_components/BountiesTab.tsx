@@ -1,136 +1,265 @@
 // === START: FILE_BountiesTab.tsx ===
 "use client";
 
-import { useMemo } from "react";
-import { useBounties } from "../_hooks/useBounties";
+import { useMemo, useState } from "react";
+import { useBounties, type Bounty } from "../_hooks/useBounties";
 
-// If you already have cn() in your project, import it and use it.
-// Keeping this file dependency-light on purpose.
-function pillClass(status: string) {
-  const s = (status || "").toLowerCase();
-  if (s === "open") return "border-emerald-500/25 bg-emerald-500/10 text-emerald-200";
-  if (s === "paused") return "border-yellow-500/25 bg-yellow-500/10 text-yellow-200";
-  if (s === "closed") return "border-zinc-500/25 bg-zinc-500/10 text-zinc-200";
-  return "border-white/10 bg-white/5 text-zinc-200";
+// If you already have cn() in this project and want to use it, you can swap these
+// className joins with cn(). Keeping it dependency-free here.
+function pillBase(cls: string) {
+  return `rounded-full border px-3 py-1 text-xs font-semibold ${cls}`;
 }
 
-export default function BountiesTab(props: { initData?: string | null; sid?: string | null }) {
-  const { loading, err, list, refresh, canLoad } = useBounties({
-    initData: props.initData,
-    sid: props.sid,
-  });
+function statusPill(status?: string | null) {
+  const s = (status || "open").toLowerCase();
+  if (s === "open") return { label: "OPEN", cls: "border-emerald-500/25 bg-emerald-500/10 text-emerald-200" };
+  if (s === "paused") return { label: "PAUSED", cls: "border-yellow-500/25 bg-yellow-500/10 text-yellow-200" };
+  return { label: "CLOSED", cls: "border-red-500/25 bg-red-500/10 text-red-200" };
+}
 
-  const visible = useMemo(() => {
-    // MVP: only show published/open-ish items; backend can also handle this
-    return (list || []).filter((b) => b && b.id);
+function fmtReward(b: Bounty) {
+  const r = (b.reward ?? "").toString().trim();
+  const c = (b.currency ?? "USDC").toString().trim();
+  if (!r) return null;
+  return `${r} ${c}`;
+}
+
+export default function BountiesTab({
+  initData,
+  sid,
+}: {
+  initData?: string | null;
+  sid?: string | null;
+}) {
+  const { loading, err, list, refresh } = useBounties({ initData, sid });
+
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [selected, setSelected] = useState<Bounty | null>(null);
+
+  const sorted = useMemo(() => {
+    // Keep it simple: newest first (API already does, but we harden)
+    return (list || []).slice().sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
   }, [list]);
 
+  function openDetails(b: Bounty) {
+    setSelected(b);
+    setDetailsOpen(true);
+
+    // Optional TG haptic (safe if not available)
+    try {
+      // @ts-ignore
+      window?.Telegram?.WebApp?.HapticFeedback?.impactOccurred?.("light");
+    } catch {}
+  }
+
+  function closeDetails() {
+    setDetailsOpen(false);
+    // delay clearing selection to avoid visual pop during animation
+    setTimeout(() => setSelected(null), 120);
+  }
+
+  const sPill = statusPill(selected?.status);
+
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-base font-semibold">🎯 Bounties</div>
-          <div className="mt-1 text-sm text-zinc-400">
-            Limited-time bounties with winners, badges, and referrals. (We’ll wire apply + leaderboard next.)
+    <>
+      {/* === START: BOUNTIES_PANEL === */}
+      <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-base font-semibold">🎯 Bounties</div>
+            <div className="mt-1 text-sm text-zinc-400">
+              Limited-time bounties with winners, badges, and referrals. (We&apos;ll wire apply + leaderboard next.)
+            </div>
           </div>
+
+          <button
+            type="button"
+            onClick={refresh}
+            className="h-10 shrink-0 rounded-2xl border border-white/10 bg-white/5 px-3 text-xs font-semibold text-zinc-200 hover:bg-white/10"
+          >
+            Refresh
+          </button>
         </div>
 
-        <button
-          type="button"
-          onClick={refresh}
-          className="h-10 shrink-0 rounded-2xl border border-white/10 bg-white/5 px-3 text-xs font-semibold text-zinc-200 hover:bg-white/10"
-        >
-          Refresh
-        </button>
-      </div>
+        {loading && (
+          <div className="mt-4 rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-zinc-300">
+            Loading bounties…
+          </div>
+        )}
 
-      {!canLoad && (
-        <div className="mt-4 rounded-xl border border-yellow-500/25 bg-yellow-500/10 px-3 py-3 text-sm text-yellow-200">
-          Telegram initData not ready yet. Re-open the mini app from the bot.
-        </div>
-      )}
+        {err && (
+          <div className="mt-4 rounded-xl border border-yellow-500/25 bg-yellow-500/10 px-3 py-3 text-sm text-yellow-200">
+            {err}
+          </div>
+        )}
 
-      {loading && (
-        <div className="mt-4 rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-zinc-300">Loading bounties…</div>
-      )}
+        {!loading && !err && sorted.length === 0 && (
+          <div className="mt-4 rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-zinc-300">
+            No bounties yet.
+          </div>
+        )}
 
-      {err && (
-        <div className="mt-4 rounded-xl border border-yellow-500/25 bg-yellow-500/10 px-3 py-3 text-sm text-yellow-200">{err}</div>
-      )}
+        {!loading && !err && sorted.length > 0 && (
+          <div className="mt-4 space-y-3">
+            {sorted.map((b) => {
+              const sp = statusPill(b.status);
+              const rewardText = fmtReward(b);
 
-      {!loading && !err && visible.length === 0 && (
-        <div className="mt-4 rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-zinc-300">
-          No bounties yet.
-        </div>
-      )}
-
-      {!loading && !err && visible.length > 0 && (
-        <div className="mt-4 space-y-3">
-          {visible.map((b) => {
-            const status = (b.status || "open") as string;
-            const rewardText =
-              (b.reward && String(b.reward).trim()) || (b.currency ? `Reward in ${b.currency}` : "Reward available");
-
-            return (
-              <div key={b.id} className="rounded-2xl border border-white/10 bg-black/25 p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-sm font-semibold break-words">{b.title || "Bounty"}</div>
-                    {b.description ? <div className="mt-1 text-sm text-zinc-400 break-words">{b.description}</div> : null}
-
-                    <div className="mt-2 text-xs text-zinc-500">
-                      Code: <span className="font-mono">{b.code}</span>
-                      {b.min_tier ? (
-                        <>
-                          {" "}
-                          · Min tier: <span className="font-semibold">{b.min_tier}</span>
-                        </>
+              return (
+                <div key={b.id} className="rounded-2xl border border-white/10 bg-black/25 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold break-words">{b.title || "Bounty"}</div>
+                      {b.description ? (
+                        <div className="mt-1 text-sm text-zinc-400 break-words">{b.description}</div>
                       ) : null}
+
+                      <div className="mt-2 text-xs text-zinc-500">
+                        Code: <span className="font-mono">{b.code}</span>
+                        {b.min_tier ? (
+                          <>
+                            {" "}
+                            · Min tier: <span className="font-semibold">{b.min_tier}</span>
+                          </>
+                        ) : null}
+                      </div>
                     </div>
 
-                    <div className="mt-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-zinc-300">
+                    <div className="flex shrink-0 flex-col items-end gap-2">
+                      <div className={pillBase(sp.cls)}>{sp.label}</div>
+                    </div>
+                  </div>
+
+                  {/* quick reward line (optional) */}
+                  {rewardText ? (
+                    <div className="mt-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-zinc-100">
                       {rewardText}
                     </div>
-                  </div>
+                  ) : null}
 
-                  <div className="flex shrink-0 flex-col items-end gap-2">
-                    <div className={`rounded-full border px-3 py-1 text-xs font-semibold ${pillClass(status)}`}>
-                      {status.toUpperCase()}
+                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={() => openDetails(b)}
+                      className="h-11 rounded-xl border border-white/10 bg-white/5 text-sm font-semibold text-zinc-200 hover:bg-white/10 active:scale-[0.99]"
+                    >
+                      View details
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        // Apply comes next (Step B). For now keep as placeholder.
+                        try {
+                          // @ts-ignore
+                          window?.Telegram?.WebApp?.showAlert?.("Apply flow is next. We’re starting with details UI first.");
+                        } catch {
+                          alert("Apply flow is next. We’re starting with details UI first.");
+                        }
+                      }}
+                      className="h-11 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 text-sm font-semibold hover:brightness-110 active:scale-[0.99]"
+                    >
+                      Apply (next)
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+      {/* === END: BOUNTIES_PANEL === */}
+
+      {/* === START: BOUNTY_DETAILS_SHEET === */}
+      {detailsOpen && selected ? (
+        <div className="fixed inset-0 z-[80]">
+          {/* backdrop */}
+          <button
+            type="button"
+            aria-label="Close details"
+            onClick={closeDetails}
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+          />
+
+          {/* sheet */}
+          <div className="absolute bottom-0 left-0 right-0 mx-auto w-full max-w-3xl">
+            <div className="rounded-t-3xl border border-white/10 bg-[#070A0D]/95 p-4 shadow-2xl">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-base font-semibold break-words">{selected.title || "Bounty"}</div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <div className={pillBase(sPill.cls)}>{sPill.label}</div>
+                    {selected.min_tier ? (
+                      <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-200">
+                        Min tier: {selected.min_tier}
+                      </div>
+                    ) : null}
+                    <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-200">
+                      Code: <span className="font-mono">{selected.code}</span>
                     </div>
                   </div>
                 </div>
 
-                {/* MVP: placeholder actions (we’ll add Apply + share/referral next) */}
-                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  <button
-                    type="button"
-                    className="h-11 rounded-xl border border-white/10 bg-white/5 text-sm font-semibold text-zinc-200 hover:bg-white/10 active:scale-[0.99]"
-                    onClick={() => {
-                      // Step 4 will implement view/apply modal
-                      // For now: no-op
-                    }}
-                  >
-                    View details
-                  </button>
+                <button
+                  type="button"
+                  onClick={closeDetails}
+                  className="h-10 rounded-2xl border border-white/10 bg-white/5 px-4 text-xs font-semibold text-zinc-200 hover:bg-white/10"
+                >
+                  Close
+                </button>
+              </div>
 
-                  <button
-                    type="button"
-                    className="h-11 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 text-sm font-semibold hover:brightness-110 active:scale-[0.99]"
-                    onClick={() => {
-                      // Step 5 will implement apply flow + form_sessions(kind='bounty')
-                      // For now: no-op
-                    }}
-                  >
-                    Apply (next)
-                  </button>
+              {selected.description ? (
+                <div className="mt-3 rounded-2xl border border-white/10 bg-black/25 p-3 text-sm text-zinc-300">
+                  {selected.description}
+                </div>
+              ) : null}
+
+              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
+                  <div className="text-[11px] text-zinc-500">Reward</div>
+                  <div className="mt-1 text-sm font-semibold text-zinc-100">{fmtReward(selected) || "—"}</div>
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
+                  <div className="text-[11px] text-zinc-500">Published</div>
+                  <div className="mt-1 text-sm font-semibold text-zinc-100">
+                    {selected.published ? "Yes" : "No"}
+                  </div>
                 </div>
               </div>
-            );
-          })}
+
+              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    // Apply comes next
+                    try {
+                      // @ts-ignore
+                      window?.Telegram?.WebApp?.showAlert?.("Apply flow is next. We’re starting with details UI first.");
+                    } catch {
+                      alert("Apply flow is next. We’re starting with details UI first.");
+                    }
+                  }}
+                  className="h-12 rounded-2xl bg-gradient-to-r from-purple-600 to-fuchsia-600 text-sm font-semibold hover:brightness-110 active:scale-[0.99]"
+                >
+                  Apply (next)
+                </button>
+
+                <button
+                  type="button"
+                  onClick={closeDetails}
+                  className="h-12 rounded-2xl border border-white/10 bg-white/5 text-sm font-semibold text-zinc-200 hover:bg-white/10 active:scale-[0.99]"
+                >
+                  Back
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
-      )}
-    </div>
+      ) : null}
+      {/* === END: BOUNTY_DETAILS_SHEET === */}
+    </>
   );
 }
 // === END: FILE_BountiesTab.tsx ===
-
