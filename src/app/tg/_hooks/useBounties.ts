@@ -66,10 +66,15 @@ export function useBounties(args: UseBountiesArgs) {
         throw new Error(json?.error || `Failed to load bounties (${res.status})`);
       }
 
+      // ✅ Your API returns { ok: true, bounties: [...] }
       const rows: Bounty[] = Array.isArray(json)
-        ? json
+        ? (json as any)
+        : Array.isArray(json?.bounties)
+        ? json.bounties
         : Array.isArray(json?.list)
         ? json.list
+        : Array.isArray(json?.items)
+        ? json.items
         : Array.isArray(json?.data)
         ? json.data
         : [];
