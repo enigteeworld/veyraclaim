@@ -191,7 +191,7 @@ export async function POST(req: Request) {
           id: bounty.id,
           title: bounty.title ?? null,
           description: (bounty as any).description ?? null,
-          instructions: (bounty as any).instructions ?? null,
+          how_to: (bounty as any).how_to ?? null,
           min_tier: bounty.min_tier ?? null,
           reward: (bounty as any).reward ?? null,
           currency: (bounty as any).currency ?? null,
