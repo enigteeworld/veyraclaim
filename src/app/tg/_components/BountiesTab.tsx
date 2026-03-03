@@ -116,6 +116,16 @@ function fmtDt(s?: string | null) {
   return d.toLocaleString();
 }
 
+function safeStringify(v: any) {
+  try {
+    if (v === null || v === undefined) return "";
+    if (typeof v === "string") return v;
+    return JSON.stringify(v);
+  } catch {
+    return String(v ?? "");
+  }
+}
+
 /** Tier comparison for gating */
 function tierRank(t?: string | null) {
   const s = String(t || "").toLowerCase();
@@ -141,23 +151,6 @@ function withinWindow(starts_at?: string | null, ends_at?: string | null) {
   return { ok: true as const };
 }
 
-function shortAddr(addr: string, head = 6, tail = 4) {
-  const a = String(addr || "").trim();
-  if (!a) return "";
-  if (a.length <= head + tail + 3) return a;
-  return `${a.slice(0, head)}…${a.slice(-tail)}`;
-}
-
-async function tryCopy(text: string) {
-  try {
-    if (!text) return false;
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export default function BountiesTab({ initData, sid }: { initData?: string | null; sid?: string | null }) {
   const { loading, err, list, refresh } = useBounties({ initData, sid });
 
@@ -168,7 +161,6 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
   const [profile, setProfile] = useState<HydratedProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileErr, setProfileErr] = useState<string>("");
-  const [copied, setCopied] = useState(false);
 
   // Apply flow state
   const [applyOpen, setApplyOpen] = useState(false);
@@ -191,19 +183,24 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
     return id;
   }
 
-  async function hydrateProfile() {
+  async function hydrateProfile(opts?: { force?: boolean }) {
     setProfileErr("");
     setProfileLoading(true);
-    setCopied(false);
 
     try {
       const id = await getBestInitData();
       if (!id) throw new Error("Telegram initData missing. Reopen the mini app.");
 
-      // 1) Get wallet (bot-verified) + cached tier/score from /api/tg/me (ideal)
-      const meRes = await fetch("/api/tg/me", { method: "GET", headers: { ...tgInitHeaders(id) } });
+      // 1) Get wallet (bot-verified) from /api/tg/me
+      const meRes = await fetch("/api/tg/me", {
+        method: "GET",
+        headers: { ...tgInitHeaders(id) },
+      });
+
       const meJson = (await meRes.json().catch(() => null)) as any;
-      if (!meRes.ok || !meJson?.ok) throw new Error(meJson?.error || `Failed to load profile (${meRes.status})`);
+      if (!meRes.ok || !meJson?.ok) {
+        throw new Error(meJson?.error || `Failed to load profile (${meRes.status})`);
+      }
 
       const wallet =
         (meJson?.data?.saved_wallet ||
@@ -212,27 +209,38 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
           meJson?.data?.savedWallet ||
           "")?.toString() || "";
 
-      const tier = (meJson?.data?.last_known_tier || meJson?.data?.tier || meJson?.tier || "bronze")?.toString() || "bronze";
-
-      const scoreRaw =
-        meJson?.data?.last_known_fairscore ??
-        meJson?.data?.fairscore ??
-        meJson?.data?.fairScore ??
-        meJson?.fairscore ??
-        null;
-
-      const fairscore = typeof scoreRaw === "number" ? scoreRaw : scoreRaw ? Number(scoreRaw) : null;
+      // Tier might already be computed server-side; if not, keep "bronze" default.
+      const tier = (meJson?.data?.tier || meJson?.tier || "bronze")?.toString() || "bronze";
 
       if (!wallet) {
         setProfile(null);
         return;
       }
 
-      setProfile({
-        wallet,
-        tier: String(tier || "bronze").toLowerCase(),
-        fairscore: Number.isFinite(fairscore as any) ? (fairscore as number) : null,
+      // 2) Get fairscore via /api/tg/verify (cached server-side)
+      const vRes = await fetch("/api/tg/verify", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...tgInitHeaders(id) },
+        body: JSON.stringify({ wallet }),
       });
+
+      const vJson = (await vRes.json().catch(() => null)) as any;
+      if (!vRes.ok || !vJson?.ok) {
+        // If verify fails, still keep wallet/tier so gating can explain “score unavailable”
+        setProfile({ wallet, tier, fairscore: null });
+        throw new Error(vJson?.error || `Score lookup failed (${vRes.status})`);
+      }
+
+      // Be tolerant about field names returned by FairScale wrapper
+      const scoreRaw =
+        vJson?.data?.fairscore ??
+        vJson?.data?.fairScore ??
+        vJson?.data?.score ??
+        vJson?.data?.value ??
+        null;
+
+      const fairscore = typeof scoreRaw === "number" ? scoreRaw : scoreRaw ? Number(scoreRaw) : null;
+      setProfile({ wallet, tier, fairscore: Number.isFinite(fairscore as any) ? (fairscore as number) : null });
     } catch (e: any) {
       setProfileErr(e?.message || "Could not hydrate profile.");
     } finally {
@@ -278,10 +286,13 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
 
     const minTier = String(b?.min_tier || "").trim();
     if (minTier) {
-      if (tierRank(profile.tier) < tierRank(minTier)) return { ok: false, reason: `Requires ${minTier}+` };
+      if (tierRank(profile.tier) < tierRank(minTier)) {
+        return { ok: false, reason: `Requires ${minTier}+` };
+      }
     }
 
-    // Keep consistent with server: require fairscore present
+    // Optional: require score to be present before apply
+    // If you want “wallet verified but score missing still allow apply”, delete this block.
     if (profile.fairscore === null) return { ok: false, reason: "Score unavailable" };
 
     return { ok: true };
@@ -295,12 +306,14 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
     setAnswers({});
 
     try {
+      // UI gating (backend should also gate)
       const gate = canApply(b);
       if (!gate.ok) throw new Error(gate.reason || "Not eligible to apply.");
 
       const id = await getBestInitData();
       if (!id) throw new Error("Telegram initData missing. Reopen the mini app.");
 
+      // Session endpoint
       const res = await fetch("/api/tg/bounty/session", {
         method: "POST",
         headers: { "content-type": "application/json", ...tgInitHeaders(id) },
@@ -313,7 +326,9 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
       });
 
       const j = (await res.json().catch(() => null)) as any;
-      if (!res.ok || !j?.ok) throw new Error(j?.error || `Could not start apply (${res.status})`);
+      if (!res.ok || !j?.ok) {
+        throw new Error(j?.error || `Could not start apply (${res.status})`);
+      }
 
       const session = j.data as BountyApplySession;
       setApplySession(session);
@@ -355,6 +370,7 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
       const id = await getBestInitData();
       if (!id) throw new Error("Telegram initData missing. Reopen the mini app.");
 
+      // Submit endpoint
       const res = await fetch("/api/tg/bounty/submit", {
         method: "POST",
         headers: { "content-type": "application/json", ...tgInitHeaders(id) },
@@ -368,7 +384,9 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
       });
 
       const j = (await res.json().catch(() => null)) as any;
-      if (!res.ok || !j?.ok) throw new Error(j?.error || `Submit failed (${res.status})`);
+      if (!res.ok || !j?.ok) {
+        throw new Error(j?.error || `Submit failed (${res.status})`);
+      }
 
       setApplyOk(j?.message || "✅ Submitted");
       getTg()?.HapticFeedback?.notificationOccurred?.("success");
@@ -397,56 +415,22 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
             </div>
 
             {/* === START: PROFILE_STRIP === */}
-            <div className="mt-3 rounded-2xl border border-white/10 bg-black/25 px-3 py-2 text-xs text-zinc-300 overflow-hidden">
+            <div className="mt-3 rounded-2xl border border-white/10 bg-black/25 px-3 py-2 text-xs text-zinc-300">
               {profileLoading ? (
                 <span className="text-zinc-400">Hydrating profile…</span>
               ) : profile ? (
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="truncate">
-                      Wallet:{" "}
-                      <span
-                        className="font-mono"
-                        title={profile.wallet}
-                        style={{ WebkitTextSizeAdjust: "100%" }}
-                      >
-                        {shortAddr(profile.wallet)}
-                      </span>
-                    </div>
-                    <div className="mt-0.5 truncate text-zinc-400">
-                      Tier: <span className="font-semibold text-zinc-200">{profile.tier}</span>
-                      {typeof profile.fairscore === "number" ? (
-                        <>
-                          {" "}
-                          · FairScore: <span className="font-mono text-zinc-200">{profile.fairscore.toFixed(1)}</span>
-                        </>
-                      ) : (
-                        <>
-                          {" "}
-                          · <span className="text-yellow-200">Score unavailable</span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      const ok = await tryCopy(profile.wallet);
-                      setCopied(ok);
-                      try {
-                        getTg()?.HapticFeedback?.notificationOccurred?.(ok ? "success" : "error");
-                      } catch {}
-                      if (ok) setTimeout(() => setCopied(false), 900);
-                    }}
-                    className={cn(
-                      "shrink-0 h-9 rounded-xl border px-3 text-xs font-semibold",
-                      "border-white/10 bg-white/5 text-zinc-200 hover:bg-white/10"
-                    )}
-                  >
-                    {copied ? "Copied" : "Copy"}
-                  </button>
-                </div>
+                <>
+                  Wallet: <span className="font-mono block truncate max-w-full">{profile.wallet}</span> · Tier:{" "}
+                  <span className="font-semibold">{profile.tier}</span>
+                  {typeof profile.fairscore === "number" ? (
+                    <>
+                      {" "}
+                      · FairScore: <span className="font-mono">{profile.fairscore.toFixed(1)}</span>
+                    </>
+                  ) : (
+                    <> · <span className="text-yellow-200">Score unavailable</span></>
+                  )}
+                </>
               ) : (
                 <span className="text-yellow-200">No verified wallet yet (verify in bot)</span>
               )}
@@ -475,7 +459,7 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
             <button
               type="button"
               disabled={profileLoading}
-              onClick={() => hydrateProfile().catch(() => {})}
+              onClick={() => hydrateProfile({ force: true }).catch(() => {})}
               className={cn(
                 "h-10 shrink-0 rounded-2xl border px-3 text-xs font-semibold",
                 profileLoading ? "border-white/10 bg-white/5 text-zinc-400" : "border-white/10 bg-white/5 text-zinc-200 hover:bg-white/10"
@@ -703,12 +687,9 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-base font-semibold break-words">{applySession.bounty.title || "Bounty application"}</div>
-                  <div className="mt-1 text-xs text-zinc-500 break-words">
-                    Wallet:{" "}
-                    <span className="font-mono" title={applySession.profile.wallet}>
-                      {shortAddr(applySession.profile.wallet)}
-                    </span>{" "}
-                    · Tier: <span className="font-semibold">{applySession.profile.tier}</span>
+                  <div className="mt-1 text-xs text-zinc-500">
+                    Wallet: <span className="font-mono">{applySession.profile.wallet}</span> · Tier:{" "}
+                    <span className="font-semibold">{applySession.profile.tier}</span>
                     {typeof applySession.profile.fairscore === "number" ? (
                       <>
                         {" "}
@@ -842,7 +823,12 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
                     {applyLoading ? "Submitting…" : "Submit application"}
                   </button>
 
-                  {/* Debug removed (per request) */}
+                  <details className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                    <summary className="cursor-pointer text-xs font-semibold text-zinc-300">Debug</summary>
+                    <pre className="mt-2 max-h-[240px] overflow-auto rounded-xl bg-black/30 p-3 text-xs text-zinc-200">
+                      {safeStringify({ sid: applySession.sid, answers })}
+                    </pre>
+                  </details>
                 </div>
               </div>
             </div>
