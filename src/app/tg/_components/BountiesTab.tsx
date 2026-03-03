@@ -1,7 +1,7 @@
 // === START: FILE_src/app/tg/_components/BountiesTab.tsx ===
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useBounties, type Bounty } from "../_hooks/useBounties";
 
 type AppQuestion =
@@ -27,6 +27,12 @@ type BountyApplySession = {
     questions?: AppQuestion[];
   };
   profile: { wallet: string; tier: string; fairscore: number | null };
+};
+
+type HydratedProfile = {
+  wallet: string;
+  tier: string; // bronze/silver/gold...
+  fairscore: number | null;
 };
 
 function cn(...xs: Array<string | false | null | undefined>) {
@@ -66,25 +72,20 @@ function ensureTelegramScript(): Promise<void> {
 }
 
 /**
- * IMPORTANT:
- * Your backend parser (per screenshot) checks these keys:
+ * Backend parser checks:
  * - x-telegram-init-data
  * - x-init-data
  * - x-tg-init-data
- *
- * Previously this file sent "x-telegram-initdata" / "x-tg-initdata" (missing hyphen),
- * so the backend often read empty initData -> session fails -> Apply loops.
  */
 function tgInitHeaders(initData: string) {
   const id = (initData || "").toString();
   if (!id) return {};
   return {
-    // ✅ exact keys backend reads
     "x-telegram-init-data": id,
     "x-init-data": id,
     "x-tg-init-data": id,
 
-    // ✅ keep a couple extra variants (harmless)
+    // extra variants (harmless)
     "x-telegram-initdata": id,
     "x-tg-initdata": id,
   } as Record<string, string>;
@@ -125,11 +126,41 @@ function safeStringify(v: any) {
   }
 }
 
+/** Tier comparison for gating */
+function tierRank(t?: string | null) {
+  const s = String(t || "").toLowerCase();
+  const order = ["none", "bronze", "silver", "gold", "platinum", "diamond"];
+  const i = order.indexOf(s);
+  return i === -1 ? 0 : i;
+}
+
+function nowMs() {
+  return Date.now();
+}
+
+function withinWindow(starts_at?: string | null, ends_at?: string | null) {
+  const n = nowMs();
+  if (starts_at) {
+    const s = new Date(starts_at).getTime();
+    if (!Number.isNaN(s) && n < s) return { ok: false, reason: "Not started yet" };
+  }
+  if (ends_at) {
+    const e = new Date(ends_at).getTime();
+    if (!Number.isNaN(e) && n > e) return { ok: false, reason: "Ended" };
+  }
+  return { ok: true as const };
+}
+
 export default function BountiesTab({ initData, sid }: { initData?: string | null; sid?: string | null }) {
   const { loading, err, list, refresh } = useBounties({ initData, sid });
 
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selected, setSelected] = useState<Bounty | null>(null);
+
+  // Profile hydration (wallet + tier + fairscore)
+  const [profile, setProfile] = useState<HydratedProfile | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileErr, setProfileErr] = useState<string>("");
 
   // Apply flow state
   const [applyOpen, setApplyOpen] = useState(false);
@@ -152,6 +183,77 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
     return id;
   }
 
+  async function hydrateProfile(opts?: { force?: boolean }) {
+    setProfileErr("");
+    setProfileLoading(true);
+
+    try {
+      const id = await getBestInitData();
+      if (!id) throw new Error("Telegram initData missing. Reopen the mini app.");
+
+      // 1) Get wallet (bot-verified) from /api/tg/me
+      const meRes = await fetch("/api/tg/me", {
+        method: "GET",
+        headers: { ...tgInitHeaders(id) },
+      });
+
+      const meJson = (await meRes.json().catch(() => null)) as any;
+      if (!meRes.ok || !meJson?.ok) {
+        throw new Error(meJson?.error || `Failed to load profile (${meRes.status})`);
+      }
+
+      const wallet =
+        (meJson?.data?.saved_wallet ||
+          meJson?.data?.wallet ||
+          meJson?.wallet ||
+          meJson?.data?.savedWallet ||
+          "")?.toString() || "";
+
+      // Tier might already be computed server-side; if not, keep "bronze" default.
+      const tier = (meJson?.data?.tier || meJson?.tier || "bronze")?.toString() || "bronze";
+
+      if (!wallet) {
+        setProfile(null);
+        return;
+      }
+
+      // 2) Get fairscore via /api/tg/verify (cached server-side)
+      const vRes = await fetch("/api/tg/verify", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...tgInitHeaders(id) },
+        body: JSON.stringify({ wallet }),
+      });
+
+      const vJson = (await vRes.json().catch(() => null)) as any;
+      if (!vRes.ok || !vJson?.ok) {
+        // If verify fails, still keep wallet/tier so gating can explain “score unavailable”
+        setProfile({ wallet, tier, fairscore: null });
+        throw new Error(vJson?.error || `Score lookup failed (${vRes.status})`);
+      }
+
+      // Be tolerant about field names returned by FairScale wrapper
+      const scoreRaw =
+        vJson?.data?.fairscore ??
+        vJson?.data?.fairScore ??
+        vJson?.data?.score ??
+        vJson?.data?.value ??
+        null;
+
+      const fairscore = typeof scoreRaw === "number" ? scoreRaw : scoreRaw ? Number(scoreRaw) : null;
+      setProfile({ wallet, tier, fairscore: Number.isFinite(fairscore as any) ? (fairscore as number) : null });
+    } catch (e: any) {
+      setProfileErr(e?.message || "Could not hydrate profile.");
+    } finally {
+      setProfileLoading(false);
+    }
+  }
+
+  // Hydrate once when tab mounts / initData changes
+  useEffect(() => {
+    hydrateProfile().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initData]);
+
   function openDetails(b: Bounty) {
     setSelected(b);
     setDetailsOpen(true);
@@ -173,6 +275,29 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
     setAnswers({});
   }
 
+  function canApply(b: any): { ok: boolean; reason?: string } {
+    const status = String(b?.status || "open").toLowerCase();
+    if (status !== "open") return { ok: false, reason: status === "paused" ? "Paused" : "Closed" };
+
+    const w = withinWindow(b?.starts_at, b?.ends_at);
+    if (!w.ok) return { ok: false, reason: w.reason };
+
+    if (!profile?.wallet) return { ok: false, reason: "Verify wallet first" };
+
+    const minTier = String(b?.min_tier || "").trim();
+    if (minTier) {
+      if (tierRank(profile.tier) < tierRank(minTier)) {
+        return { ok: false, reason: `Requires ${minTier}+` };
+      }
+    }
+
+    // Optional: require score to be present before apply
+    // If you want “wallet verified but score missing still allow apply”, delete this block.
+    if (profile.fairscore === null) return { ok: false, reason: "Score unavailable" };
+
+    return { ok: true };
+  }
+
   async function startApply(b: any) {
     setApplyErr("");
     setApplyOk("");
@@ -181,10 +306,14 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
     setAnswers({});
 
     try {
+      // UI gating (backend should also gate)
+      const gate = canApply(b);
+      if (!gate.ok) throw new Error(gate.reason || "Not eligible to apply.");
+
       const id = await getBestInitData();
       if (!id) throw new Error("Telegram initData missing. Reopen the mini app.");
 
-      // ✅ A: session endpoint
+      // Session endpoint
       const res = await fetch("/api/tg/bounty/session", {
         method: "POST",
         headers: { "content-type": "application/json", ...tgInitHeaders(id) },
@@ -241,7 +370,7 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
       const id = await getBestInitData();
       if (!id) throw new Error("Telegram initData missing. Reopen the mini app.");
 
-      // ✅ A: submit endpoint
+      // Submit endpoint
       const res = await fetch("/api/tg/bounty/submit", {
         method: "POST",
         headers: { "content-type": "application/json", ...tgInitHeaders(id) },
@@ -284,25 +413,69 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
             <div className="mt-1 text-sm text-zinc-400">
               Limited-time bounties with winners, badges, and referrals. Apply is verified-wallet + tier-gated.
             </div>
+
+            {/* === START: PROFILE_STRIP === */}
+            <div className="mt-3 rounded-2xl border border-white/10 bg-black/25 px-3 py-2 text-xs text-zinc-300">
+              {profileLoading ? (
+                <span className="text-zinc-400">Hydrating profile…</span>
+              ) : profile ? (
+                <>
+                  Wallet: <span className="font-mono">{profile.wallet}</span> · Tier:{" "}
+                  <span className="font-semibold">{profile.tier}</span>
+                  {typeof profile.fairscore === "number" ? (
+                    <>
+                      {" "}
+                      · FairScore: <span className="font-mono">{profile.fairscore.toFixed(1)}</span>
+                    </>
+                  ) : (
+                    <> · <span className="text-yellow-200">Score unavailable</span></>
+                  )}
+                </>
+              ) : (
+                <span className="text-yellow-200">No verified wallet yet (verify in bot)</span>
+              )}
+            </div>
+            {/* === END: PROFILE_STRIP === */}
+
+            {profileErr ? (
+              <div className="mt-2 rounded-xl border border-yellow-500/25 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-200">
+                {profileErr}
+              </div>
+            ) : null}
           </div>
 
-          <button
-            type="button"
-            onClick={refresh}
-            className="h-10 shrink-0 rounded-2xl border border-white/10 bg-white/5 px-3 text-xs font-semibold text-zinc-200 hover:bg-white/10"
-          >
-            Refresh
-          </button>
-        </div>
-{!applyOpen && applyErr ? (
-  <div className="mt-4 rounded-xl border border-red-500/25 bg-red-500/10 px-3 py-3 text-sm text-red-200">
-    {applyErr}
-  </div>
-) : null}
-        {err ? (
-          <div className="mt-4 rounded-xl border border-yellow-500/25 bg-yellow-500/10 px-3 py-3 text-sm text-yellow-200">
-            {err}
+          <div className="flex shrink-0 flex-col gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                refresh();
+                hydrateProfile().catch(() => {});
+              }}
+              className="h-10 shrink-0 rounded-2xl border border-white/10 bg-white/5 px-3 text-xs font-semibold text-zinc-200 hover:bg-white/10"
+            >
+              Refresh
+            </button>
+
+            <button
+              type="button"
+              disabled={profileLoading}
+              onClick={() => hydrateProfile({ force: true }).catch(() => {})}
+              className={cn(
+                "h-10 shrink-0 rounded-2xl border px-3 text-xs font-semibold",
+                profileLoading ? "border-white/10 bg-white/5 text-zinc-400" : "border-white/10 bg-white/5 text-zinc-200 hover:bg-white/10"
+              )}
+            >
+              {profileLoading ? "Checking…" : "Recheck score"}
+            </button>
           </div>
+        </div>
+
+        {!applyOpen && applyErr ? (
+          <div className="mt-4 rounded-xl border border-red-500/25 bg-red-500/10 px-3 py-3 text-sm text-red-200">{applyErr}</div>
+        ) : null}
+
+        {err ? (
+          <div className="mt-4 rounded-xl border border-yellow-500/25 bg-yellow-500/10 px-3 py-3 text-sm text-yellow-200">{err}</div>
         ) : null}
 
         {loading ? (
@@ -310,9 +483,7 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
         ) : null}
 
         {!loading && !err && sorted.length === 0 ? (
-          <div className="mt-4 rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-zinc-300">
-            No bounties yet.
-          </div>
+          <div className="mt-4 rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-zinc-300">No bounties yet.</div>
         ) : null}
 
         {!loading && !err && sorted.length > 0 ? (
@@ -320,6 +491,7 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
             {sorted.map((b: any) => {
               const sp = statusPill(b.status);
               const r = fmtReward(b);
+              const gate = canApply(b);
 
               return (
                 <div key={b.id} className="rounded-2xl border border-white/10 bg-black/25 p-4">
@@ -365,14 +537,17 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
 
                     <button
                       type="button"
-                      disabled={applyLoading}
+                      disabled={applyLoading || !gate.ok}
                       onClick={() => startApply(b)}
                       className={cn(
                         "h-11 rounded-xl text-sm font-semibold active:scale-[0.99]",
-                        applyLoading ? "border border-white/10 bg-white/5 text-zinc-400" : "bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:brightness-110"
+                        applyLoading || !gate.ok
+                          ? "border border-white/10 bg-white/5 text-zinc-400"
+                          : "bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:brightness-110"
                       )}
+                      title={!gate.ok ? gate.reason : undefined}
                     >
-                      {applyLoading ? "Starting…" : "Apply"}
+                      {applyLoading ? "Starting…" : !gate.ok ? gate.reason || "Not eligible" : "Apply"}
                     </button>
                   </div>
                 </div>
@@ -386,12 +561,7 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
       {/* === START: BOUNTY_DETAILS_SHEET === */}
       {detailsOpen && selected ? (
         <div className="fixed inset-0 z-[80]">
-          <button
-            type="button"
-            aria-label="Close details"
-            onClick={closeDetails}
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-          />
+          <button type="button" aria-label="Close details" onClick={closeDetails} className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
 
           <div className="absolute bottom-0 left-0 right-0 mx-auto w-full max-w-3xl">
             <div className="rounded-t-3xl border border-white/10 bg-[#070A0D]/95 p-4 shadow-2xl">
@@ -480,14 +650,16 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
                 <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <button
                     type="button"
-                    disabled={applyLoading}
+                    disabled={applyLoading || !canApply(selectedAny).ok}
                     onClick={() => startApply(selectedAny)}
                     className={cn(
                       "h-12 rounded-2xl text-sm font-semibold active:scale-[0.99]",
-                      applyLoading ? "border border-white/10 bg-white/5 text-zinc-400" : "bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:brightness-110"
+                      applyLoading || !canApply(selectedAny).ok
+                        ? "border border-white/10 bg-white/5 text-zinc-400"
+                        : "bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:brightness-110"
                     )}
                   >
-                    {applyLoading ? "Starting…" : "Apply"}
+                    {applyLoading ? "Starting…" : canApply(selectedAny).ok ? "Apply" : canApply(selectedAny).reason || "Not eligible"}
                   </button>
 
                   <button
@@ -668,4 +840,3 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
   );
 }
 // === END: FILE_src/app/tg/_components/BountiesTab.tsx ===
-
