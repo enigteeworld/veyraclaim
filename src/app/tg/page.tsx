@@ -2621,9 +2621,7 @@ return (
             ) : null}
           </section>
         )}
-        // === START: TAB_PANEL_BOUNTIES ===
 {tab === "bounties" && <BountiesTab initData={initData} sid={sid} />}
-// === END: TAB_PANEL_BOUNTIES ===
       </main>
 
       {/* Bottom nav */}
