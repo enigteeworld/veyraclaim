@@ -75,6 +75,19 @@ function tierMeets(userTier?: string | null, minTier?: string | null) {
   return u >= m;
 }
 
+function withinWindow(starts_at?: string | null, ends_at?: string | null) {
+  const n = Date.now();
+  if (starts_at) {
+    const s = new Date(starts_at).getTime();
+    if (!Number.isNaN(s) && n < s) return { ok: false as const, reason: "not started yet" };
+  }
+  if (ends_at) {
+    const e = new Date(ends_at).getTime();
+    if (!Number.isNaN(e) && n > e) return { ok: false as const, reason: "ended" };
+  }
+  return { ok: true as const };
+}
+
 function pickInitDataFromReq(req: Request, body: any) {
   const h = req.headers;
   const candidates = [
@@ -90,12 +103,6 @@ function pickInitDataFromReq(req: Request, body: any) {
     .filter(Boolean);
 
   return candidates[0] || "";
-}
-
-function asMs(d: any): number | null {
-  if (!d) return null;
-  const t = new Date(d).getTime();
-  return Number.isNaN(t) ? null : t;
 }
 
 export async function POST(req: Request) {
@@ -126,29 +133,14 @@ export async function POST(req: Request) {
     if (!bounty?.id) return NextResponse.json({ ok: false, error: "bounty not found" }, { status: 404 });
     if (bounty.published === false) return NextResponse.json({ ok: false, error: "bounty not published" }, { status: 403 });
 
-    // ✅ Server-side gating: status must be open
-    const status = String((bounty as any)?.status || "open").toLowerCase();
-    if (status !== "open") {
-      return NextResponse.json(
-        { ok: false, error: status === "paused" ? "bounty paused" : "bounty closed" },
-        { status: 403 }
-      );
+    const bountyStatus = String((bounty as any)?.status || "open").toLowerCase();
+    if (bountyStatus !== "open") {
+      return NextResponse.json({ ok: false, error: bountyStatus === "paused" ? "bounty paused" : "bounty closed" }, { status: 403 });
     }
+    const w = withinWindow((bounty as any)?.starts_at ?? null, (bounty as any)?.ends_at ?? null);
+    if (!w.ok) return NextResponse.json({ ok: false, error: w.reason }, { status: 403 });
 
-    // ✅ Server-side gating: time window
-    const now = Date.now();
-    const startsMs = asMs((bounty as any)?.starts_at);
-    const endsMs = asMs((bounty as any)?.ends_at);
-    if (startsMs !== null && now < startsMs) {
-      return NextResponse.json({ ok: false, error: "bounty not started yet" }, { status: 403 });
-    }
-    if (endsMs !== null && now > endsMs) {
-      return NextResponse.json({ ok: false, error: "bounty ended" }, { status: 403 });
-    }
-
-    /**
-     * telegram_users hydration
-     */
+    // Load user state (wallet/tier/fairscore)
     const { data: tu, error: tuErr } = await supabaseAdmin
       .from("telegram_users")
       .select("telegram_user_id, saved_wallet, last_known_tier, last_known_fairscore")
@@ -158,11 +150,7 @@ export async function POST(req: Request) {
     if (tuErr) throw new Error(tuErr.message);
 
     const wallet = String((tu as any)?.saved_wallet || "").trim();
-
-    const tier =
-      normTier((tu as any)?.last_known_tier) ||
-      normTier((tu as any)?.lastKnownTier) ||
-      null;
+    const tier = normTier((tu as any)?.last_known_tier) || normTier((tu as any)?.lastKnownTier) || null;
 
     const fairscore =
       typeof (tu as any)?.last_known_fairscore === "number"
@@ -171,23 +159,15 @@ export async function POST(req: Request) {
           ? Number((tu as any).last_known_fairscore)
           : null;
 
-    if (!wallet) {
-      return NextResponse.json({ ok: false, error: "no verified wallet (verify in bot first)" }, { status: 403 });
-    }
-    if (!tier) {
-      return NextResponse.json({ ok: false, error: "tier not loaded yet (run Check once)" }, { status: 403 });
-    }
+    if (!wallet) return NextResponse.json({ ok: false, error: "no verified wallet (verify in bot first)" }, { status: 403 });
+    if (!tier) return NextResponse.json({ ok: false, error: "tier not loaded yet (run Check once)" }, { status: 403 });
+    if (!Number.isFinite(fairscore as any)) return NextResponse.json({ ok: false, error: "score not loaded yet (run Check once)" }, { status: 403 });
+
     if (!tierMeets(tier, (bounty as any)?.min_tier || null)) {
       return NextResponse.json(
         { ok: false, error: `tier too low (requires ${String((bounty as any)?.min_tier || "").toLowerCase()})` },
         { status: 403 }
       );
-    }
-
-    // ✅ Optional server-side gating: require score present
-    // If you want a threshold, replace with: if (!fairscore || fairscore < 10) ...
-    if (fairscore === null || !Number.isFinite(fairscore)) {
-      return NextResponse.json({ ok: false, error: "score not loaded yet (run Check once)" }, { status: 403 });
     }
 
     // Create a session
@@ -206,7 +186,7 @@ export async function POST(req: Request) {
 
     if (sErr) throw new Error(sErr.message);
 
-    // Questions schema
+    // Questions schema (supports either [..] or {questions:[..]})
     const questions = Array.isArray((bounty as any)?.application_schema)
       ? (bounty as any).application_schema
       : Array.isArray((bounty as any)?.application_schema?.questions)
@@ -224,10 +204,8 @@ export async function POST(req: Request) {
           id: bounty.id,
           title: (bounty as any).title ?? null,
           description: (bounty as any).description ?? null,
-
           how_to: (bounty as any).how_to ?? null,
           instructions,
-
           min_tier: (bounty as any).min_tier ?? null,
           reward: (bounty as any).reward ?? null,
           currency: (bounty as any).currency ?? null,
