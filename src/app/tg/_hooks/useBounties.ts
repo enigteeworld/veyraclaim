@@ -7,6 +7,8 @@ export type Bounty = {
   id: string;
   code: string;
   title: string;
+
+  // core
   description?: string | null;
   reward?: string | null;
   currency?: string | null;
@@ -15,11 +17,24 @@ export type Bounty = {
   published?: boolean | null;
   application_schema?: any;
   created_at?: string | null;
+
+  // richer details (for “View details”)
+  how_to?: string | null;
+  rules?: string | null;
+  link_url?: string | null;
+  max_winners?: number | null;
+  starts_at?: string | null;
+  ends_at?: string | null;
+
+  // attribution / ownership
+  project_id?: string | null;
+  posted_by_type?: "veyra" | "project" | string | null;
+  posted_by_name?: string | null; // computed on API (Veyra or project name)
 };
 
 type UseBountiesArgs = {
   initData?: string | null;
-  sid?: string | null; // optional (if you ever want to scope bounties by project/admin later)
+  sid?: string | null; // optional (future scoping)
 };
 
 export function useBounties(args: UseBountiesArgs) {
@@ -45,7 +60,7 @@ export function useBounties(args: UseBountiesArgs) {
 
     try {
       const headers: Record<string, string> = {
-        // we send multiple variants to match whatever your backend expects
+        // send multiple variants to match whatever your backend expects
         "x-telegram-init-data": initData,
         "x-init-data": initData,
         "x-tg-init-data": initData,
@@ -66,7 +81,7 @@ export function useBounties(args: UseBountiesArgs) {
         throw new Error(json?.error || `Failed to load bounties (${res.status})`);
       }
 
-      // ✅ Your API returns { ok: true, bounties: [...] }
+      // ✅ API supports multiple shapes; prefer bounties
       const rows: Bounty[] = Array.isArray(json)
         ? (json as any)
         : Array.isArray(json?.bounties)

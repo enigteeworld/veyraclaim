@@ -1,11 +1,9 @@
-// === START: FILE_BountiesTab.tsx ===
+// === START: FILE_src/app/tg/_components/BountiesTab.tsx ===
 "use client";
 
 import { useMemo, useState } from "react";
 import { useBounties, type Bounty } from "../_hooks/useBounties";
 
-// If you already have cn() in this project and want to use it, you can swap these
-// className joins with cn(). Keeping it dependency-free here.
 function pillBase(cls: string) {
   return `rounded-full border px-3 py-1 text-xs font-semibold ${cls}`;
 }
@@ -24,6 +22,13 @@ function fmtReward(b: Bounty) {
   return `${r} ${c}`;
 }
 
+function fmtDt(s?: string | null) {
+  if (!s) return null;
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleString();
+}
+
 export default function BountiesTab({
   initData,
   sid,
@@ -37,7 +42,6 @@ export default function BountiesTab({
   const [selected, setSelected] = useState<Bounty | null>(null);
 
   const sorted = useMemo(() => {
-    // Keep it simple: newest first (API already does, but we harden)
     return (list || []).slice().sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
   }, [list]);
 
@@ -45,7 +49,6 @@ export default function BountiesTab({
     setSelected(b);
     setDetailsOpen(true);
 
-    // Optional TG haptic (safe if not available)
     try {
       // @ts-ignore
       window?.Telegram?.WebApp?.HapticFeedback?.impactOccurred?.("light");
@@ -54,11 +57,13 @@ export default function BountiesTab({
 
   function closeDetails() {
     setDetailsOpen(false);
-    // delay clearing selection to avoid visual pop during animation
     setTimeout(() => setSelected(null), 120);
   }
 
   const sPill = statusPill(selected?.status);
+  const rewardText = selected ? fmtReward(selected) : null;
+  const startsTxt = fmtDt(selected?.starts_at);
+  const endsTxt = fmtDt(selected?.ends_at);
 
   return (
     <>
@@ -103,7 +108,7 @@ export default function BountiesTab({
           <div className="mt-4 space-y-3">
             {sorted.map((b) => {
               const sp = statusPill(b.status);
-              const rewardText = fmtReward(b);
+              const r = fmtReward(b);
 
               return (
                 <div key={b.id} className="rounded-2xl border border-white/10 bg-black/25 p-4">
@@ -122,6 +127,12 @@ export default function BountiesTab({
                             · Min tier: <span className="font-semibold">{b.min_tier}</span>
                           </>
                         ) : null}
+                        {b.posted_by_name ? (
+                          <>
+                            {" "}
+                            · Posted by: <span className="font-semibold">{b.posted_by_name}</span>
+                          </>
+                        ) : null}
                       </div>
                     </div>
 
@@ -130,10 +141,9 @@ export default function BountiesTab({
                     </div>
                   </div>
 
-                  {/* quick reward line (optional) */}
-                  {rewardText ? (
+                  {r ? (
                     <div className="mt-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-zinc-100">
-                      {rewardText}
+                      {r}
                     </div>
                   ) : null}
 
@@ -149,7 +159,6 @@ export default function BountiesTab({
                     <button
                       type="button"
                       onClick={() => {
-                        // Apply comes next (Step B). For now keep as placeholder.
                         try {
                           // @ts-ignore
                           window?.Telegram?.WebApp?.showAlert?.("Apply flow is next. We’re starting with details UI first.");
@@ -173,7 +182,6 @@ export default function BountiesTab({
       {/* === START: BOUNTY_DETAILS_SHEET === */}
       {detailsOpen && selected ? (
         <div className="fixed inset-0 z-[80]">
-          {/* backdrop */}
           <button
             type="button"
             aria-label="Close details"
@@ -181,21 +189,27 @@ export default function BountiesTab({
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
           />
 
-          {/* sheet */}
           <div className="absolute bottom-0 left-0 right-0 mx-auto w-full max-w-3xl">
             <div className="rounded-t-3xl border border-white/10 bg-[#070A0D]/95 p-4 shadow-2xl">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-base font-semibold break-words">{selected.title || "Bounty"}</div>
+
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <div className={pillBase(sPill.cls)}>{sPill.label}</div>
+
                     {selected.min_tier ? (
                       <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-200">
                         Min tier: {selected.min_tier}
                       </div>
                     ) : null}
+
                     <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-200">
                       Code: <span className="font-mono">{selected.code}</span>
+                    </div>
+
+                    <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-200">
+                      Posted by: <span className="font-semibold">{selected.posted_by_name || "Veyra"}</span>
                     </div>
                   </div>
                 </div>
@@ -209,23 +223,73 @@ export default function BountiesTab({
                 </button>
               </div>
 
+              {/* ABOUT */}
               {selected.description ? (
-                <div className="mt-3 rounded-2xl border border-white/10 bg-black/25 p-3 text-sm text-zinc-300">
-                  {selected.description}
+                <div className="mt-3 rounded-2xl border border-white/10 bg-black/25 p-3">
+                  <div className="text-[11px] text-zinc-500">About</div>
+                  <div className="mt-1 text-sm text-zinc-300">{selected.description}</div>
                 </div>
               ) : null}
 
+              {/* WHAT TO DO */}
+              {selected.how_to ? (
+                <div className="mt-2 rounded-2xl border border-white/10 bg-black/25 p-3">
+                  <div className="text-[11px] text-zinc-500">What you need to do</div>
+                  <div className="mt-1 whitespace-pre-wrap text-sm text-zinc-300">{selected.how_to}</div>
+                </div>
+              ) : null}
+
+              {/* RULES */}
+              {selected.rules ? (
+                <div className="mt-2 rounded-2xl border border-white/10 bg-black/25 p-3">
+                  <div className="text-[11px] text-zinc-500">Rules / judging</div>
+                  <div className="mt-1 whitespace-pre-wrap text-sm text-zinc-300">{selected.rules}</div>
+                </div>
+              ) : null}
+
+              {/* META GRID */}
               <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
                   <div className="text-[11px] text-zinc-500">Reward</div>
-                  <div className="mt-1 text-sm font-semibold text-zinc-100">{fmtReward(selected) || "—"}</div>
+                  <div className="mt-1 text-sm font-semibold text-zinc-100">{rewardText || "—"}</div>
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
+                  <div className="text-[11px] text-zinc-500">Max winners</div>
+                  <div className="mt-1 text-sm font-semibold text-zinc-100">
+                    {typeof selected.max_winners === "number" ? selected.max_winners : "—"}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
+                  <div className="text-[11px] text-zinc-500">Starts</div>
+                  <div className="mt-1 text-sm font-semibold text-zinc-100">{startsTxt || "—"}</div>
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
+                  <div className="text-[11px] text-zinc-500">Ends</div>
+                  <div className="mt-1 text-sm font-semibold text-zinc-100">{endsTxt || "—"}</div>
                 </div>
 
                 <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
                   <div className="text-[11px] text-zinc-500">Published</div>
-                  <div className="mt-1 text-sm font-semibold text-zinc-100">
-                    {selected.published ? "Yes" : "No"}
-                  </div>
+                  <div className="mt-1 text-sm font-semibold text-zinc-100">{selected.published ? "Yes" : "No"}</div>
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
+                  <div className="text-[11px] text-zinc-500">Link</div>
+                  {selected.link_url ? (
+                    <a
+                      href={selected.link_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-1 block truncate text-sm font-semibold text-purple-200 underline underline-offset-4"
+                    >
+                      {selected.link_url}
+                    </a>
+                  ) : (
+                    <div className="mt-1 text-sm font-semibold text-zinc-100">—</div>
+                  )}
                 </div>
               </div>
 
@@ -233,7 +297,6 @@ export default function BountiesTab({
                 <button
                   type="button"
                   onClick={() => {
-                    // Apply comes next
                     try {
                       // @ts-ignore
                       window?.Telegram?.WebApp?.showAlert?.("Apply flow is next. We’re starting with details UI first.");
@@ -262,4 +325,4 @@ export default function BountiesTab({
     </>
   );
 }
-// === END: FILE_BountiesTab.tsx ===
+// === END: FILE_src/app/tg/_components/BountiesTab.tsx ===
