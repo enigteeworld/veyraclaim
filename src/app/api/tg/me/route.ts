@@ -1,4 +1,4 @@
-// src/app/api/tg/me/route.ts
+// === START: FILE_src/app/api/tg/me/route.ts ===
 import { NextResponse } from "next/server";
 import crypto from "crypto";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
@@ -65,8 +65,6 @@ async function ensureTelegramUserRow(telegram_user_id: number, user: any) {
   const first_name = user?.first_name || null;
   const last_name = user?.last_name || null;
 
-  // NOTE: This assumes telegram_users has these columns.
-  // If yours doesn't, tell me the telegram_users schema and I'll adjust.
   const { error } = await supabaseAdmin.from("telegram_users").upsert(
     {
       telegram_user_id,
@@ -81,42 +79,80 @@ async function ensureTelegramUserRow(telegram_user_id: number, user: any) {
   if (error) throw new Error(error.message);
 }
 
-export async function POST(req: Request) {
+/* ================================================
+   === START: SHARED_HANDLER_ME ===
+   Used by BOTH GET and POST.
+   ================================================ */
+async function handleMe(initData: string) {
+  const clean = String(initData || "").trim();
+  if (!clean) {
+    return NextResponse.json({ ok: false, error: "missing initData" }, { status: 400 });
+  }
+
+  const v = verifyInitData(clean);
+  if (!v.ok) {
+    return NextResponse.json({ ok: false, error: v.reason }, { status: 401 });
+  }
+
+  const telegram_user_id = v.user?.id ? Number(v.user.id) : null;
+  if (!telegram_user_id) {
+    return NextResponse.json({ ok: false, error: "missing user id" }, { status: 401 });
+  }
+
+  // Ensure the user exists in DB (so saved_wallet lookups are stable)
+  await ensureTelegramUserRow(telegram_user_id, v.user);
+
+  const { data: row, error } = await supabaseAdmin
+    .from("telegram_users")
+    .select("telegram_user_id, username, first_name, last_name, saved_wallet")
+    .eq("telegram_user_id", telegram_user_id)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+
+  // Keep response SHAPE consistent for both callers
+  return NextResponse.json({
+    ok: true,
+    data: {
+      telegram_user_id,
+      username: row?.username ?? v.user?.username ?? null,
+      first_name: row?.first_name ?? v.user?.first_name ?? null,
+      last_name: row?.last_name ?? v.user?.last_name ?? null,
+      saved_wallet: row?.saved_wallet ?? null,
+    },
+  });
+}
+/* ================================================
+   === END: SHARED_HANDLER_ME ===
+   ================================================ */
+
+/* ================================================
+   === START: GET_ME ===
+   Supports BountiesTab calling /api/tg/me with headers.
+   ================================================ */
+export async function GET(req: Request) {
   try {
-    const body = await req.json().catch(() => ({}));
-    const initData = String(body?.initData || "").trim();
+    const initData =
+      (req.headers.get("x-telegram-init-data") || "").trim() ||
+      (req.headers.get("x-init-data") || "").trim() ||
+      (req.headers.get("x-tg-init-data") || "").trim();
 
-    if (!initData) return NextResponse.json({ ok: false, error: "missing initData" }, { status: 400 });
-
-    const v = verifyInitData(initData);
-    if (!v.ok) return NextResponse.json({ ok: false, error: v.reason }, { status: 401 });
-
-    const telegram_user_id = v.user?.id ? Number(v.user.id) : null;
-    if (!telegram_user_id) return NextResponse.json({ ok: false, error: "missing user id" }, { status: 401 });
-
-    // Ensure the user exists in DB (so saved_wallet lookups are stable)
-    await ensureTelegramUserRow(telegram_user_id, v.user);
-
-    // Pull saved wallet + anything else you want to hydrate in the mini app
-    const { data: row, error } = await supabaseAdmin
-      .from("telegram_users")
-      .select("telegram_user_id, username, first_name, last_name, saved_wallet")
-      .eq("telegram_user_id", telegram_user_id)
-      .maybeSingle();
-
-    if (error) throw new Error(error.message);
-
-    return NextResponse.json({
-      ok: true,
-      data: {
-        telegram_user_id,
-        username: row?.username ?? v.user?.username ?? null,
-        first_name: row?.first_name ?? v.user?.first_name ?? null,
-        last_name: row?.last_name ?? v.user?.last_name ?? null,
-        saved_wallet: row?.saved_wallet ?? null,
-      },
-    });
+    return await handleMe(initData);
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || "me error" }, { status: 500 });
   }
 }
+/* ================================================
+   === END: GET_ME ===
+   ================================================ */
+
+export async function POST(req: Request) {
+  try {
+    const body = await req.json().catch(() => ({}));
+    const initData = String(body?.initData || "").trim();
+    return await handleMe(initData);
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message || "me error" }, { status: 500 });
+  }
+}
+// === END: FILE_src/app/api/tg/me/route.ts ===
