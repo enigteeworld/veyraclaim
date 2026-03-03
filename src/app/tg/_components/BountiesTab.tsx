@@ -294,7 +294,11 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
             Refresh
           </button>
         </div>
-
+{!applyOpen && applyErr ? (
+  <div className="mt-4 rounded-xl border border-red-500/25 bg-red-500/10 px-3 py-3 text-sm text-red-200">
+    {applyErr}
+  </div>
+) : null}
         {err ? (
           <div className="mt-4 rounded-xl border border-yellow-500/25 bg-yellow-500/10 px-3 py-3 text-sm text-yellow-200">
             {err}
