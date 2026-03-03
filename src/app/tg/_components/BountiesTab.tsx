@@ -62,8 +62,8 @@ export default function BountiesTab({
 
   const sPill = statusPill(selected?.status);
   const rewardText = selected ? fmtReward(selected) : null;
-  const startsTxt = fmtDt(selected?.starts_at);
-  const endsTxt = fmtDt(selected?.ends_at);
+  const startsTxt = fmtDt((selected as any)?.starts_at);
+  const endsTxt = fmtDt((selected as any)?.ends_at);
 
   return (
     <>
@@ -115,9 +115,7 @@ export default function BountiesTab({
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="text-sm font-semibold break-words">{b.title || "Bounty"}</div>
-                      {b.description ? (
-                        <div className="mt-1 text-sm text-zinc-400 break-words">{b.description}</div>
-                      ) : null}
+                      {b.description ? <div className="mt-1 text-sm text-zinc-400 break-words">{b.description}</div> : null}
 
                       <div className="mt-2 text-xs text-zinc-500">
                         Code: <span className="font-mono">{b.code}</span>
@@ -127,10 +125,10 @@ export default function BountiesTab({
                             · Min tier: <span className="font-semibold">{b.min_tier}</span>
                           </>
                         ) : null}
-                        {b.posted_by_name ? (
+                        {(b as any).posted_by_name ? (
                           <>
                             {" "}
-                            · Posted by: <span className="font-semibold">{b.posted_by_name}</span>
+                            · Posted by: <span className="font-semibold">{(b as any).posted_by_name}</span>
                           </>
                         ) : null}
                       </div>
@@ -182,6 +180,7 @@ export default function BountiesTab({
       {/* === START: BOUNTY_DETAILS_SHEET === */}
       {detailsOpen && selected ? (
         <div className="fixed inset-0 z-[80]">
+          {/* Backdrop (click to close) */}
           <button
             type="button"
             aria-label="Close details"
@@ -189,135 +188,143 @@ export default function BountiesTab({
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
           />
 
+          {/* Sheet */}
           <div className="absolute bottom-0 left-0 right-0 mx-auto w-full max-w-3xl">
-            <div className="rounded-t-3xl border border-white/10 bg-[#070A0D]/95 p-4 shadow-2xl">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-base font-semibold break-words">{selected.title || "Bounty"}</div>
+            {/* ✅ scroll container */}
+            <div
+              className="rounded-t-3xl border border-white/10 bg-[#070A0D]/95 shadow-2xl max-h-[82vh] overflow-y-auto overscroll-contain"
+              style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 16px)" }}
+            >
+              <div className="p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-base font-semibold break-words">{selected.title || "Bounty"}</div>
 
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <div className={pillBase(sPill.cls)}>{sPill.label}</div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <div className={pillBase(sPill.cls)}>{sPill.label}</div>
 
-                    {selected.min_tier ? (
+                      {selected.min_tier ? (
+                        <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-200">
+                          Min tier: {selected.min_tier}
+                        </div>
+                      ) : null}
+
                       <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-200">
-                        Min tier: {selected.min_tier}
+                        Code: <span className="font-mono">{selected.code}</span>
                       </div>
-                    ) : null}
 
-                    <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-200">
-                      Code: <span className="font-mono">{selected.code}</span>
+                      <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-200">
+                        Posted by: <span className="font-semibold">{(selected as any).posted_by_name || "Veyra"}</span>
+                      </div>
                     </div>
+                  </div>
 
-                    <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-200">
-                      Posted by: <span className="font-semibold">{selected.posted_by_name || "Veyra"}</span>
+                  <button
+                    type="button"
+                    onClick={closeDetails}
+                    className="h-10 rounded-2xl border border-white/10 bg-white/5 px-4 text-xs font-semibold text-zinc-200 hover:bg-white/10"
+                  >
+                    Close
+                  </button>
+                </div>
+
+                {/* ABOUT */}
+                {selected.description ? (
+                  <div className="mt-3 rounded-2xl border border-white/10 bg-black/25 p-3">
+                    <div className="text-[11px] text-zinc-500">About</div>
+                    <div className="mt-1 text-sm text-zinc-300">{selected.description}</div>
+                  </div>
+                ) : null}
+
+                {/* WHAT TO DO */}
+                {(selected as any).how_to ? (
+                  <div className="mt-2 rounded-2xl border border-white/10 bg-black/25 p-3">
+                    <div className="text-[11px] text-zinc-500">What you need to do</div>
+                    <div className="mt-1 whitespace-pre-wrap text-sm text-zinc-300">{(selected as any).how_to}</div>
+                  </div>
+                ) : null}
+
+                {/* RULES */}
+                {(selected as any).rules ? (
+                  <div className="mt-2 rounded-2xl border border-white/10 bg-black/25 p-3">
+                    <div className="text-[11px] text-zinc-500">Rules / judging</div>
+                    <div className="mt-1 whitespace-pre-wrap text-sm text-zinc-300">{(selected as any).rules}</div>
+                  </div>
+                ) : null}
+
+                {/* META GRID */}
+                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
+                    <div className="text-[11px] text-zinc-500">Reward</div>
+                    <div className="mt-1 text-sm font-semibold text-zinc-100">{rewardText || "—"}</div>
+                  </div>
+
+                  <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
+                    <div className="text-[11px] text-zinc-500">Max winners</div>
+                    <div className="mt-1 text-sm font-semibold text-zinc-100">
+                      {typeof (selected as any).max_winners === "number" ? (selected as any).max_winners : "—"}
                     </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
+                    <div className="text-[11px] text-zinc-500">Starts</div>
+                    <div className="mt-1 text-sm font-semibold text-zinc-100">{startsTxt || "—"}</div>
+                  </div>
+
+                  <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
+                    <div className="text-[11px] text-zinc-500">Ends</div>
+                    <div className="mt-1 text-sm font-semibold text-zinc-100">{endsTxt || "—"}</div>
+                  </div>
+
+                  <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
+                    <div className="text-[11px] text-zinc-500">Published</div>
+                    <div className="mt-1 text-sm font-semibold text-zinc-100">{selected.published ? "Yes" : "No"}</div>
+                  </div>
+
+                  <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
+                    <div className="text-[11px] text-zinc-500">Link</div>
+                    {(selected as any).link_url ? (
+                      <a
+                        href={(selected as any).link_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-1 block truncate text-sm font-semibold text-purple-200 underline underline-offset-4"
+                      >
+                        {(selected as any).link_url}
+                      </a>
+                    ) : (
+                      <div className="mt-1 text-sm font-semibold text-zinc-100">—</div>
+                    )}
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={closeDetails}
-                  className="h-10 rounded-2xl border border-white/10 bg-white/5 px-4 text-xs font-semibold text-zinc-200 hover:bg-white/10"
-                >
-                  Close
-                </button>
-              </div>
+                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      try {
+                        // @ts-ignore
+                        window?.Telegram?.WebApp?.showAlert?.("Apply flow is next. We’re starting with details UI first.");
+                      } catch {
+                        alert("Apply flow is next. We’re starting with details UI first.");
+                      }
+                    }}
+                    className="h-12 rounded-2xl bg-gradient-to-r from-purple-600 to-fuchsia-600 text-sm font-semibold hover:brightness-110 active:scale-[0.99]"
+                  >
+                    Apply (next)
+                  </button>
 
-              {/* ABOUT */}
-              {selected.description ? (
-                <div className="mt-3 rounded-2xl border border-white/10 bg-black/25 p-3">
-                  <div className="text-[11px] text-zinc-500">About</div>
-                  <div className="mt-1 text-sm text-zinc-300">{selected.description}</div>
+                  <button
+                    type="button"
+                    onClick={closeDetails}
+                    className="h-12 rounded-2xl border border-white/10 bg-white/5 text-sm font-semibold text-zinc-200 hover:bg-white/10 active:scale-[0.99]"
+                  >
+                    Back
+                  </button>
                 </div>
-              ) : null}
-
-              {/* WHAT TO DO */}
-              {selected.how_to ? (
-                <div className="mt-2 rounded-2xl border border-white/10 bg-black/25 p-3">
-                  <div className="text-[11px] text-zinc-500">What you need to do</div>
-                  <div className="mt-1 whitespace-pre-wrap text-sm text-zinc-300">{selected.how_to}</div>
-                </div>
-              ) : null}
-
-              {/* RULES */}
-              {selected.rules ? (
-                <div className="mt-2 rounded-2xl border border-white/10 bg-black/25 p-3">
-                  <div className="text-[11px] text-zinc-500">Rules / judging</div>
-                  <div className="mt-1 whitespace-pre-wrap text-sm text-zinc-300">{selected.rules}</div>
-                </div>
-              ) : null}
-
-              {/* META GRID */}
-              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
-                  <div className="text-[11px] text-zinc-500">Reward</div>
-                  <div className="mt-1 text-sm font-semibold text-zinc-100">{rewardText || "—"}</div>
-                </div>
-
-                <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
-                  <div className="text-[11px] text-zinc-500">Max winners</div>
-                  <div className="mt-1 text-sm font-semibold text-zinc-100">
-                    {typeof selected.max_winners === "number" ? selected.max_winners : "—"}
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
-                  <div className="text-[11px] text-zinc-500">Starts</div>
-                  <div className="mt-1 text-sm font-semibold text-zinc-100">{startsTxt || "—"}</div>
-                </div>
-
-                <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
-                  <div className="text-[11px] text-zinc-500">Ends</div>
-                  <div className="mt-1 text-sm font-semibold text-zinc-100">{endsTxt || "—"}</div>
-                </div>
-
-                <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
-                  <div className="text-[11px] text-zinc-500">Published</div>
-                  <div className="mt-1 text-sm font-semibold text-zinc-100">{selected.published ? "Yes" : "No"}</div>
-                </div>
-
-                <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
-                  <div className="text-[11px] text-zinc-500">Link</div>
-                  {selected.link_url ? (
-                    <a
-                      href={selected.link_url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="mt-1 block truncate text-sm font-semibold text-purple-200 underline underline-offset-4"
-                    >
-                      {selected.link_url}
-                    </a>
-                  ) : (
-                    <div className="mt-1 text-sm font-semibold text-zinc-100">—</div>
-                  )}
-                </div>
-              </div>
-
-              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    try {
-                      // @ts-ignore
-                      window?.Telegram?.WebApp?.showAlert?.("Apply flow is next. We’re starting with details UI first.");
-                    } catch {
-                      alert("Apply flow is next. We’re starting with details UI first.");
-                    }
-                  }}
-                  className="h-12 rounded-2xl bg-gradient-to-r from-purple-600 to-fuchsia-600 text-sm font-semibold hover:brightness-110 active:scale-[0.99]"
-                >
-                  Apply (next)
-                </button>
-
-                <button
-                  type="button"
-                  onClick={closeDetails}
-                  className="h-12 rounded-2xl border border-white/10 bg-white/5 text-sm font-semibold text-zinc-200 hover:bg-white/10 active:scale-[0.99]"
-                >
-                  Back
-                </button>
               </div>
             </div>
+            {/* ✅ end scroll container */}
           </div>
         </div>
       ) : null}
