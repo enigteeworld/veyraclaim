@@ -1,7 +1,7 @@
 // === START: FILE_src/app/tg/_components/BountiesTab.tsx ===
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useBounties, type Bounty } from "../_hooks/useBounties";
 
 type AppQuestion =
@@ -65,14 +65,28 @@ function ensureTelegramScript(): Promise<void> {
   });
 }
 
+/**
+ * IMPORTANT:
+ * Your backend parser (per screenshot) checks these keys:
+ * - x-telegram-init-data
+ * - x-init-data
+ * - x-tg-init-data
+ *
+ * Previously this file sent "x-telegram-initdata" / "x-tg-initdata" (missing hyphen),
+ * so the backend often read empty initData -> session fails -> Apply loops.
+ */
 function tgInitHeaders(initData: string) {
   const id = (initData || "").toString();
   if (!id) return {};
   return {
-    "x-tg-initdata": id,
-    "x-tg-init-data": id,
-    "x-telegram-initdata": id,
+    // ✅ exact keys backend reads
     "x-telegram-init-data": id,
+    "x-init-data": id,
+    "x-tg-init-data": id,
+
+    // ✅ keep a couple extra variants (harmless)
+    "x-telegram-initdata": id,
+    "x-tg-initdata": id,
   } as Record<string, string>;
 }
 
@@ -170,6 +184,7 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
       const id = await getBestInitData();
       if (!id) throw new Error("Telegram initData missing. Reopen the mini app.");
 
+      // ✅ A: session endpoint
       const res = await fetch("/api/tg/bounty/session", {
         method: "POST",
         headers: { "content-type": "application/json", ...tgInitHeaders(id) },
@@ -226,6 +241,7 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
       const id = await getBestInitData();
       if (!id) throw new Error("Telegram initData missing. Reopen the mini app.");
 
+      // ✅ A: submit endpoint
       const res = await fetch("/api/tg/bounty/submit", {
         method: "POST",
         headers: { "content-type": "application/json", ...tgInitHeaders(id) },
@@ -245,8 +261,6 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
 
       setApplyOk(j?.message || "✅ Submitted");
       getTg()?.HapticFeedback?.notificationOccurred?.("success");
-
-      // Optionally close after a short delay
       setTimeout(() => closeApply(), 700);
     } catch (e: any) {
       setApplyErr(e?.message || "Failed to submit.");
@@ -633,7 +647,6 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
                     {applyLoading ? "Submitting…" : "Submit application"}
                   </button>
 
-                  {/* Debug helper if needed */}
                   <details className="rounded-2xl border border-white/10 bg-white/5 p-3">
                     <summary className="cursor-pointer text-xs font-semibold text-zinc-300">Debug</summary>
                     <pre className="mt-2 max-h-[240px] overflow-auto rounded-xl bg-black/30 p-3 text-xs text-zinc-200">
@@ -651,3 +664,4 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
   );
 }
 // === END: FILE_src/app/tg/_components/BountiesTab.tsx ===
+
