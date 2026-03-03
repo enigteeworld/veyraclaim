@@ -1497,7 +1497,7 @@ export default function TgMiniAppPage() {
               🎯 <span className="hidden sm:inline">Campaigns</span>
               <span className="sm:hidden">Camp</span>
             </button>
-// === START: TAB BUTTON (Bounties) ===
+
 <button
   type="button"
   onClick={() => setTab("bounties")}
@@ -1510,7 +1510,7 @@ export default function TgMiniAppPage() {
 >
   🎯 Bounties
 </button>
-// === END: TAB BUTTON (Bounties) ===
+
 
             {showAdminTabs && (
               <button
