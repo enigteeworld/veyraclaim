@@ -111,7 +111,7 @@ export async function POST(req: Request) {
     const { data: bounty, error: bErr } = await supabaseAdmin
       .from("bounties")
       .select(
-        "id, title, description, instructions, min_tier, reward, currency, starts_at, ends_at, published, status, link_url, max_winners, application_schema"
+        "id, title, description, how_to, min_tier, reward, currency, starts_at, ends_at, published, status, link_url, max_winners, application_schema"
       )
       .eq("id", bounty_id)
       .maybeSingle();
