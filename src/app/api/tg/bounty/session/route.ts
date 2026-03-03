@@ -120,32 +120,30 @@ export async function POST(req: Request) {
     if (!bounty?.id) return NextResponse.json({ ok: false, error: "bounty not found" }, { status: 404 });
     if (bounty.published === false) return NextResponse.json({ ok: false, error: "bounty not published" }, { status: 403 });
 
-    // Pull saved wallet + latest tier/fairscore from telegram_users
+    /**
+     * IMPORTANT:
+     * Your telegram_users table DOES NOT have `tier` (and likely not `fairscore`).
+     * Only select columns that actually exist.
+     */
     const { data: tu, error: tuErr } = await supabaseAdmin
       .from("telegram_users")
-      .select("telegram_user_id, saved_wallet, last_known_tier, last_known_fairscore, tier, fairscore")
+      .select("telegram_user_id, saved_wallet, last_known_tier, last_known_fairscore")
       .eq("telegram_user_id", telegram_user_id)
       .maybeSingle();
 
     if (tuErr) throw new Error(tuErr.message);
 
-    const wallet =
-      String((tu as any)?.saved_wallet || "").trim() ||
-      String((tu as any)?.wallet || "").trim() ||
-      "";
+    const wallet = String((tu as any)?.saved_wallet || "").trim();
 
     const tier =
       normTier((tu as any)?.last_known_tier) ||
       normTier((tu as any)?.lastKnownTier) ||
-      normTier((tu as any)?.tier) ||
       null;
 
     const fairscore =
       typeof (tu as any)?.last_known_fairscore === "number"
         ? (tu as any).last_known_fairscore
-        : typeof (tu as any)?.fairscore === "number"
-          ? (tu as any).fairscore
-          : null;
+        : null;
 
     if (!wallet) {
       return NextResponse.json({ ok: false, error: "no verified wallet (verify in bot first)" }, { status: 403 });
@@ -153,9 +151,9 @@ export async function POST(req: Request) {
     if (!tier) {
       return NextResponse.json({ ok: false, error: "tier not loaded yet (run Check once)" }, { status: 403 });
     }
-    if (!tierMeets(tier, bounty.min_tier || null)) {
+    if (!tierMeets(tier, (bounty as any)?.min_tier || null)) {
       return NextResponse.json(
-        { ok: false, error: `tier too low (requires ${String(bounty.min_tier || "").toLowerCase()})` },
+        { ok: false, error: `tier too low (requires ${String((bounty as any)?.min_tier || "").toLowerCase()})` },
         { status: 403 }
       );
     }
@@ -183,16 +181,25 @@ export async function POST(req: Request) {
         ? (bounty as any).application_schema.questions
         : [];
 
+    // Frontend expects `instructions`
+    const instructions =
+      String((bounty as any)?.how_to || "").trim() ||
+      null;
+
     return NextResponse.json({
       ok: true,
       data: {
         sid,
         bounty: {
           id: bounty.id,
-          title: bounty.title ?? null,
+          title: (bounty as any).title ?? null,
           description: (bounty as any).description ?? null,
+
+          // ✅ keep for compatibility + also send instructions for UI
           how_to: (bounty as any).how_to ?? null,
-          min_tier: bounty.min_tier ?? null,
+          instructions,
+
+          min_tier: (bounty as any).min_tier ?? null,
           reward: (bounty as any).reward ?? null,
           currency: (bounty as any).currency ?? null,
           starts_at: (bounty as any).starts_at ?? null,
