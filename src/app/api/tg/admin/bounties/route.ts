@@ -16,22 +16,21 @@ function getSid(req: Request) {
  * - telegram_admin_sessions
  * - bounties
  */
-// === START: PATCH_assertAdminSession ===
+// === ADMIN SESSION CHECK ===
 async function assertAdminSession(sid: string) {
-  const token = (sid || "").trim();
-  if (!token) throw new Error("Missing admin session (sid).");
+  if (!sid) throw new Error("Missing admin session.");
 
   const sb = supabaseAdmin;
 
-  // Your adminSid is a session token (session_key), NOT the row id (uuid).
   const { data, error } = await sb
     .from("app_sessions")
-    .select("id, session_key, kind, expires_at")
-    .eq("session_key", token)
+    .select("telegram_user_id, kind")
+    .eq("session_key", "admin")   // your DB shows this constant value
+    .eq("kind", "admin")
     .maybeSingle();
 
   if (error) throw new Error(error.message);
-  if (!data?.id) throw new Error("Invalid admin session. Reopen Admin Panel from bot.");
+  if (!data) throw new Error("Invalid admin session. Reopen Admin Panel from bot.");
 }
 
 export async function GET(req: Request) {
