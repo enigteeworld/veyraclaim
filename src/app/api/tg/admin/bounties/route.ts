@@ -21,7 +21,7 @@ async function assertAdminSession(sid: string) {
 
   const sb = supabaseAdmin;
   const { data, error } = await sb
-    .from("telegram_admin_sessions")
+    .from("app_sessions")
     .select("sid")
     .eq("sid", sid)
     .maybeSingle();
