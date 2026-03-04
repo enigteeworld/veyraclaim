@@ -66,7 +66,7 @@ export async function POST(req: Request) {
     await assertAdminSession(sid);
 
     const payload = {
-      code: body?.code ?? null,
+      code: body?.code || `BNTY-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
       title: String(body?.title || "").trim().slice(0, 120),
       description: body?.description ?? null,
       instructions: String(body?.instructions || "").trim(),
