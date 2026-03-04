@@ -35,6 +35,30 @@ type HydratedProfile = {
   fairscore: number | null;
 };
 
+type AdminDraftQuestion = {
+  id: string;
+  type: "text" | "textarea" | "select";
+  label: string;
+  required: boolean;
+  placeholder: string;
+  maxLen: string;
+  optionsCsv: string; // for select
+};
+
+type AdminBountyDraft = {
+  title: string;
+  description: string;
+  instructions: string;
+  minTier: string;
+  reward: string;
+  currency: string;
+  startsAt: string; // datetime-local
+  endsAt: string; // datetime-local
+  linkUrl: string;
+  maxWinners: string;
+  questions: AdminDraftQuestion[];
+};
+
 function cn(...xs: Array<string | false | null | undefined>) {
   return xs.filter(Boolean).join(" ");
 }
@@ -183,25 +207,128 @@ function parseScoreAny(v: any): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-export default function BountiesTab({ initData, sid }: { initData?: string | null; sid?: string | null }) {
+function makeId(prefix = "q") {
+  return `${prefix}_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
+}
+
+function defaultAdminDraft(): AdminBountyDraft {
+  return {
+    title: "",
+    description: "",
+    instructions: "",
+    minTier: "bronze",
+    reward: "10",
+    currency: "USDC",
+    startsAt: "",
+    endsAt: "",
+    linkUrl: "",
+    maxWinners: "10",
+    questions: [
+      {
+        id: makeId("q"),
+        type: "text",
+        label: "Proof link",
+        required: true,
+        placeholder: "https://…",
+        maxLen: "240",
+        optionsCsv: "",
+      },
+    ],
+  };
+}
+
+function safeNum(n: any): number | null {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return null;
+  return x;
+}
+
+function adminDraftToQuestions(qs: AdminDraftQuestion[]): AppQuestion[] {
+  return (qs || [])
+    .slice(0, 20)
+    .map((q) => {
+      const label = (q.label || "").trim().slice(0, 120) || "Question";
+      const required = !!q.required;
+
+      const maxLenNum = Number(q.maxLen);
+      const maxLen = Number.isFinite(maxLenNum) && maxLenNum > 0 ? Math.floor(maxLenNum) : undefined;
+
+      if (q.type === "select") {
+        const options = (q.optionsCsv || "")
+          .split(",")
+          .map((x) => x.trim())
+          .filter(Boolean)
+          .slice(0, 24);
+        return { id: q.id, type: "select", label, required, options };
+      }
+
+      if (q.type === "textarea") {
+        return {
+          id: q.id,
+          type: "textarea",
+          label,
+          required,
+          placeholder: (q.placeholder || "").trim().slice(0, 140) || undefined,
+          maxLen,
+        };
+      }
+
+      return {
+        id: q.id,
+        type: "text",
+        label,
+        required,
+        placeholder: (q.placeholder || "").trim().slice(0, 140) || undefined,
+        maxLen,
+      };
+    });
+}
+
+/**
+ * FIX 1 (Admin/User flow):
+ * - User mini app: can apply
+ * - Admin panel: can create/manage; MUST NOT show apply flow
+ *
+ * This component now supports:
+ *   <BountiesTab initData={...} sid={...} />
+ *   <BountiesTab initData={...} sid={...} isAdmin adminSid={...} />
+ */
+export default function BountiesTab({
+  initData,
+  sid,
+  isAdmin = false,
+  adminSid = "",
+}: {
+  initData?: string | null;
+  sid?: string | null;
+  isAdmin?: boolean;
+  adminSid?: string;
+}) {
   const { loading, err, list, refresh } = useBounties({ initData, sid });
 
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selected, setSelected] = useState<Bounty | null>(null);
 
-  // Profile hydration (wallet + tier + fairscore)
+  // Profile hydration (wallet + tier + fairscore) — USER ONLY
   const [profile, setProfile] = useState<HydratedProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileErr, setProfileErr] = useState<string>("");
   const [copied, setCopied] = useState(false);
 
-  // Apply flow state
+  // Apply flow state — USER ONLY
   const [applyOpen, setApplyOpen] = useState(false);
   const [applyLoading, setApplyLoading] = useState(false);
   const [applyErr, setApplyErr] = useState<string>("");
   const [applyOk, setApplyOk] = useState<string>("");
   const [applySession, setApplySession] = useState<BountyApplySession | null>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
+
+  // Admin create — ADMIN ONLY
+  const [adminCreateOpen, setAdminCreateOpen] = useState(false);
+  const [adminDraft, setAdminDraft] = useState<AdminBountyDraft>(defaultAdminDraft());
+  const [adminCreateLoading, setAdminCreateLoading] = useState(false);
+  const [adminCreateErr, setAdminCreateErr] = useState<string>("");
+  const [adminCreateOk, setAdminCreateOk] = useState<string>("");
 
   const sorted = useMemo(() => {
     return (list || [])
@@ -217,6 +344,14 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
   }
 
   async function hydrateProfile(opts?: { forceVerify?: boolean }) {
+    // ADMIN SHOULD NOT HYDRATE / APPLY
+    if (isAdmin) {
+      setProfile(null);
+      setProfileErr("");
+      setProfileLoading(false);
+      return;
+    }
+
     setProfileErr("");
     setProfileLoading(true);
     setCopied(false);
@@ -253,7 +388,7 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
         const vRes = await fetch("/api/tg/verify", {
           method: "POST",
           headers: { "content-type": "application/json", ...tgInitHeaders(id) },
-          body: JSON.stringify({ wallet }), // IMPORTANT: send full wallet, never shortAddr
+          body: JSON.stringify({ wallet }), // send full wallet
         });
 
         const vJson = (await vRes.json().catch(() => null)) as any;
@@ -261,18 +396,12 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
           const fs2 = parseScoreAny(vJson);
           if (fs2 !== null) fairscore = fs2;
         } else {
-          // don't hard-fail profile hydration; just expose the reason in the yellow box
           const msg = vJson?.error || `Score lookup failed (${vRes.status})`;
-          // Only show if user explicitly requested recheck; otherwise keep UI clean.
           if (opts?.forceVerify) setProfileErr(msg);
         }
       }
 
-      setProfile({
-        wallet,
-        tier,
-        fairscore,
-      });
+      setProfile({ wallet, tier, fairscore });
     } catch (e: any) {
       setProfileErr(e?.message || "Could not hydrate profile.");
     } finally {
@@ -284,7 +413,7 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
   useEffect(() => {
     hydrateProfile().catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initData]);
+  }, [initData, isAdmin]);
 
   function openDetails(b: Bounty) {
     setSelected(b);
@@ -307,7 +436,17 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
     setAnswers({});
   }
 
+  function closeAdminCreate() {
+    setAdminCreateOpen(false);
+    setAdminCreateErr("");
+    setAdminCreateOk("");
+    setAdminCreateLoading(false);
+  }
+
   function canApply(b: any): { ok: boolean; reason?: string } {
+    // FIX 2: Never allow apply in Admin mode
+    if (isAdmin) return { ok: false, reason: "Admin mode" };
+
     const status = String(b?.status || "open").toLowerCase();
     if (status !== "open") return { ok: false, reason: status === "paused" ? "Paused" : "Closed" };
 
@@ -321,13 +460,13 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
       if (tierRank(profile.tier) < tierRank(minTier)) return { ok: false, reason: `Requires ${minTier}+` };
     }
 
-    // Keep consistent with server: require fairscore present
     if (profile.fairscore === null) return { ok: false, reason: "Score unavailable" };
-
     return { ok: true };
   }
 
   async function startApply(b: any) {
+    if (isAdmin) return;
+
     setApplyErr("");
     setApplyOk("");
     setApplyLoading(true);
@@ -359,9 +498,9 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
       setApplySession(session);
 
       const qs = (session?.bounty?.questions || []) as AppQuestion[];
-      const init: Record<string, string> = {};
-      for (const q of qs) init[q.id] = "";
-      setAnswers(init);
+      const initAns: Record<string, string> = {};
+      for (const q of qs) initAns[q.id] = "";
+      setAnswers(initAns);
 
       setApplyOpen(true);
       getTg()?.HapticFeedback?.notificationOccurred?.("success");
@@ -374,6 +513,7 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
   }
 
   async function submitBountyApplication() {
+    if (isAdmin) return;
     if (!applySession?.sid) return;
 
     setApplyErr("");
@@ -381,7 +521,6 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
     setApplyLoading(true);
 
     try {
-      // Basic client validation (required + maxLen)
       const qs = (applySession?.bounty?.questions || []) as AppQuestion[];
       for (const q of qs) {
         const v = (answers[q.id] || "").trim();
@@ -421,6 +560,82 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
     }
   }
 
+  async function adminCreateBounty() {
+    setAdminCreateErr("");
+    setAdminCreateOk("");
+
+    if (!isAdmin) return;
+    if (!adminSid) {
+      setAdminCreateErr("Admin session missing. Open Admin Panel from the bot again.");
+      return;
+    }
+
+    const title = adminDraft.title.trim();
+    if (!title) {
+      setAdminCreateErr("Title is required.");
+      return;
+    }
+
+    const reward = safeNum(adminDraft.reward);
+    const maxWinners = safeNum(adminDraft.maxWinners);
+
+    const startsAtIso = adminDraft.startsAt ? new Date(adminDraft.startsAt).toISOString() : null;
+    const endsAtIso = adminDraft.endsAt ? new Date(adminDraft.endsAt).toISOString() : null;
+
+    const payload = {
+      title,
+      description: adminDraft.description.trim() || null,
+      instructions: adminDraft.instructions.trim() || null,
+      min_tier: adminDraft.minTier.trim() || null,
+      reward,
+      currency: (adminDraft.currency || "USDC").trim(),
+      starts_at: startsAtIso,
+      ends_at: endsAtIso,
+      link_url: adminDraft.linkUrl.trim() || null,
+      max_winners: maxWinners,
+      questions: adminDraftToQuestions(adminDraft.questions),
+    };
+
+    setAdminCreateLoading(true);
+
+    try {
+      const id = await getBestInitData();
+      if (!id) throw new Error("Telegram initData missing. Reopen the mini app.");
+
+      const res = await fetch("/api/tg/admin/bounties/create", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...tgInitHeaders(id),
+          "x-admin-sid": adminSid,
+          "x-app-sid": adminSid,
+        },
+        body: JSON.stringify({
+          ...payload,
+          initData: id,
+          init_data: id,
+          initDataRaw: id,
+        }),
+      });
+
+      const j = (await res.json().catch(() => null)) as any;
+      if (!res.ok || !j?.ok) throw new Error(j?.error || `Create failed (${res.status})`);
+
+      setAdminCreateOk(j?.message || "✅ Bounty created");
+      getTg()?.HapticFeedback?.notificationOccurred?.("success");
+
+      // reset + refresh list
+      setAdminDraft(defaultAdminDraft());
+      setAdminCreateOpen(false);
+      refresh();
+    } catch (e: any) {
+      setAdminCreateErr(e?.message || "Create failed.");
+      getTg()?.HapticFeedback?.notificationOccurred?.("error");
+    } finally {
+      setAdminCreateLoading(false);
+    }
+  }
+
   const selectedAny = selected as any;
   const sPill = statusPill(selected?.status);
   const rewardText = selected ? fmtReward(selected) : null;
@@ -433,67 +648,86 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
           <div className="min-w-0">
             <div className="text-base font-semibold">🎯 Bounties</div>
             <div className="mt-1 text-sm text-zinc-400">
-              Limited-time bounties with winners, badges, and referrals. Apply is verified-wallet + tier-gated.
+              {isAdmin
+                ? "Admin mode: create bounties here. Users apply from the user mini app."
+                : "Limited-time bounties with winners, badges, and referrals. Apply is verified-wallet + tier-gated."}
             </div>
 
-            {/* === START: PROFILE_STRIP === */}
-            <div className="mt-3 rounded-2xl border border-white/10 bg-black/25 px-3 py-2 text-xs text-zinc-300 overflow-hidden">
-              {profileLoading ? (
-                <span className="text-zinc-400">Hydrating profile…</span>
-              ) : profile ? (
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="truncate">
-                      Wallet:{" "}
-                      <span className="font-mono" title={profile.wallet} style={{ WebkitTextSizeAdjust: "100%" }}>
-                        {shortAddr(profile.wallet)}
-                      </span>
-                    </div>
-                    <div className="mt-0.5 truncate text-zinc-400">
-                      Tier: <span className="font-semibold text-zinc-200">{profile.tier}</span>
-                      {typeof profile.fairscore === "number" ? (
-                        <>
-                          {" "}
-                          · FairScore: <span className="font-mono text-zinc-200">{profile.fairscore.toFixed(1)}</span>
-                        </>
-                      ) : (
-                        <>
-                          {" "}
-                          · <span className="text-yellow-200">Score unavailable</span>
-                        </>
-                      )}
-                    </div>
-                  </div>
+            {/* === START: PROFILE_STRIP (USER ONLY) === */}
+            {!isAdmin ? (
+              <>
+                <div className="mt-3 rounded-2xl border border-white/10 bg-black/25 px-3 py-2 text-xs text-zinc-300 overflow-hidden">
+                  {profileLoading ? (
+                    <span className="text-zinc-400">Hydrating profile…</span>
+                  ) : profile ? (
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="truncate">
+                          Wallet:{" "}
+                          <span className="font-mono" title={profile.wallet} style={{ WebkitTextSizeAdjust: "100%" }}>
+                            {shortAddr(profile.wallet)}
+                          </span>
+                        </div>
+                        <div className="mt-0.5 truncate text-zinc-400">
+                          Tier: <span className="font-semibold text-zinc-200">{profile.tier}</span>
+                          {typeof profile.fairscore === "number" ? (
+                            <>
+                              {" "}
+                              · FairScore:{" "}
+                              <span className="font-mono text-zinc-200">{profile.fairscore.toFixed(1)}</span>
+                            </>
+                          ) : (
+                            <>
+                              {" "}
+                              · <span className="text-yellow-200">Score unavailable</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
 
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      const ok = await tryCopy(profile.wallet);
-                      setCopied(ok);
-                      try {
-                        getTg()?.HapticFeedback?.notificationOccurred?.(ok ? "success" : "error");
-                      } catch {}
-                      if (ok) setTimeout(() => setCopied(false), 900);
-                    }}
-                    className={cn(
-                      "shrink-0 h-9 rounded-xl border px-3 text-xs font-semibold",
-                      "border-white/10 bg-white/5 text-zinc-200 hover:bg-white/10"
-                    )}
-                  >
-                    {copied ? "Copied" : "Copy"}
-                  </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const ok = await tryCopy(profile.wallet);
+                          setCopied(ok);
+                          try {
+                            getTg()?.HapticFeedback?.notificationOccurred?.(ok ? "success" : "error");
+                          } catch {}
+                          if (ok) setTimeout(() => setCopied(false), 900);
+                        }}
+                        className={cn(
+                          "shrink-0 h-9 rounded-xl border px-3 text-xs font-semibold",
+                          "border-white/10 bg-white/5 text-zinc-200 hover:bg-white/10"
+                        )}
+                      >
+                        {copied ? "Copied" : "Copy"}
+                      </button>
+                    </div>
+                  ) : (
+                    <span className="text-yellow-200">No verified wallet yet (verify in bot)</span>
+                  )}
                 </div>
-              ) : (
-                <span className="text-yellow-200">No verified wallet yet (verify in bot)</span>
-              )}
-            </div>
-            {/* === END: PROFILE_STRIP === */}
 
-            {profileErr ? (
-              <div className="mt-2 rounded-xl border border-yellow-500/25 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-200">
-                {profileErr}
-              </div>
-            ) : null}
+                {profileErr ? (
+                  <div className="mt-2 rounded-xl border border-yellow-500/25 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-200">
+                    {profileErr}
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <>
+                {!adminSid ? (
+                  <div className="mt-3 rounded-xl border border-yellow-500/25 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-200">
+                    Admin session not ready. Open Admin Panel from the bot to get adminSid.
+                  </div>
+                ) : (
+                  <div className="mt-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-zinc-300">
+                    Admin session active.
+                  </div>
+                )}
+              </>
+            )}
+            {/* === END: PROFILE_STRIP === */}
           </div>
 
           <div className="flex shrink-0 flex-col gap-2">
@@ -501,30 +735,51 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
               type="button"
               onClick={() => {
                 refresh();
-                hydrateProfile().catch(() => {});
+                if (!isAdmin) hydrateProfile().catch(() => {});
               }}
               className="h-10 shrink-0 rounded-2xl border border-white/10 bg-white/5 px-3 text-xs font-semibold text-zinc-200 hover:bg-white/10"
             >
               Refresh
             </button>
 
-            <button
-              type="button"
-              disabled={profileLoading}
-              onClick={() => hydrateProfile({ forceVerify: true }).catch(() => {})}
-              className={cn(
-                "h-10 shrink-0 rounded-2xl border px-3 text-xs font-semibold",
-                profileLoading
-                  ? "border-white/10 bg-white/5 text-zinc-400"
-                  : "border-white/10 bg-white/5 text-zinc-200 hover:bg-white/10"
-              )}
-            >
-              {profileLoading ? "Checking…" : "Recheck score"}
-            </button>
+            {!isAdmin ? (
+              <button
+                type="button"
+                disabled={profileLoading}
+                onClick={() => hydrateProfile({ forceVerify: true }).catch(() => {})}
+                className={cn(
+                  "h-10 shrink-0 rounded-2xl border px-3 text-xs font-semibold",
+                  profileLoading
+                    ? "border-white/10 bg-white/5 text-zinc-400"
+                    : "border-white/10 bg-white/5 text-zinc-200 hover:bg-white/10"
+                )}
+              >
+                {profileLoading ? "Checking…" : "Recheck score"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={!adminSid}
+                onClick={() => {
+                  setAdminCreateErr("");
+                  setAdminCreateOk("");
+                  setAdminDraft(defaultAdminDraft());
+                  setAdminCreateOpen(true);
+                }}
+                className={cn(
+                  "h-10 shrink-0 rounded-2xl px-3 text-xs font-semibold",
+                  !adminSid
+                    ? "border border-white/10 bg-white/5 text-zinc-400"
+                    : "bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white hover:brightness-110"
+                )}
+              >
+                + Create
+              </button>
+            )}
           </div>
         </div>
 
-        {!applyOpen && applyErr ? (
+        {!isAdmin && !applyOpen && applyErr ? (
           <div className="mt-4 rounded-xl border border-red-500/25 bg-red-500/10 px-3 py-3 text-sm text-red-200">
             {applyErr}
           </div>
@@ -560,7 +815,9 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="text-sm font-semibold break-words">{b.title || "Bounty"}</div>
-                      {b.description ? <div className="mt-1 text-sm text-zinc-400 break-words">{b.description}</div> : null}
+                      {b.description ? (
+                        <div className="mt-1 text-sm text-zinc-400 break-words">{b.description}</div>
+                      ) : null}
 
                       <div className="mt-2 text-xs text-zinc-500">
                         Code: <span className="font-mono">{b.code}</span>
@@ -585,7 +842,9 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
                   </div>
 
                   {r ? (
-                    <div className="mt-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-zinc-100">{r}</div>
+                    <div className="mt-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-zinc-100">
+                      {r}
+                    </div>
                   ) : null}
 
                   <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -597,20 +856,32 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
                       View details
                     </button>
 
-                    <button
-                      type="button"
-                      disabled={applyLoading || !gate.ok}
-                      onClick={() => startApply(b)}
-                      className={cn(
-                        "h-11 rounded-xl text-sm font-semibold active:scale-[0.99]",
-                        applyLoading || !gate.ok
-                          ? "border border-white/10 bg-white/5 text-zinc-400"
-                          : "bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:brightness-110"
-                      )}
-                      title={!gate.ok ? gate.reason : undefined}
-                    >
-                      {applyLoading ? "Starting…" : !gate.ok ? gate.reason || "Not eligible" : "Apply"}
-                    </button>
+                    {/* FIX 3: Apply button only in user mode; admin shows “Manage” */}
+                    {!isAdmin ? (
+                      <button
+                        type="button"
+                        disabled={applyLoading || !gate.ok}
+                        onClick={() => startApply(b)}
+                        className={cn(
+                          "h-11 rounded-xl text-sm font-semibold active:scale-[0.99]",
+                          applyLoading || !gate.ok
+                            ? "border border-white/10 bg-white/5 text-zinc-400"
+                            : "bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:brightness-110"
+                        )}
+                        title={!gate.ok ? gate.reason : undefined}
+                      >
+                        {applyLoading ? "Starting…" : !gate.ok ? gate.reason || "Not eligible" : "Apply"}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => openDetails(b)}
+                        className="h-11 rounded-xl border border-white/10 bg-white/5 text-sm font-semibold text-zinc-200 hover:bg-white/10 active:scale-[0.99]"
+                        title="Admin mode: apply disabled"
+                      >
+                        Manage
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -619,6 +890,398 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
         ) : null}
       </div>
       {/* === END: BOUNTIES_PANEL === */}
+
+      {/* === START: ADMIN_CREATE_SHEET === */}
+      {adminCreateOpen && isAdmin ? (
+        <div className="fixed inset-0 z-[85]">
+          <button
+            type="button"
+            aria-label="Close admin create"
+            onClick={closeAdminCreate}
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+          />
+
+          <div className="absolute bottom-0 left-0 right-0 mx-auto w-full max-w-3xl">
+            <div className="rounded-t-3xl border border-white/10 bg-[#070A0D]/95 p-4 shadow-2xl">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-base font-semibold">➕ Create bounty</div>
+                  <div className="mt-1 text-xs text-zinc-500">Admin creates. Users apply in user mini app.</div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={closeAdminCreate}
+                  className="h-10 rounded-2xl border border-white/10 bg-white/5 px-4 text-xs font-semibold text-zinc-200 hover:bg-white/10"
+                >
+                  Close
+                </button>
+              </div>
+
+              {adminCreateErr ? (
+                <div className="mt-3 rounded-xl border border-red-500/25 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+                  {adminCreateErr}
+                </div>
+              ) : null}
+
+              {adminCreateOk ? (
+                <div className="mt-3 rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
+                  {adminCreateOk}
+                </div>
+              ) : null}
+
+              <div
+                className="mt-3 max-h-[72vh] overflow-y-auto overscroll-contain pb-4"
+                style={{ WebkitOverflowScrolling: "touch" as any }}
+              >
+                <div className="space-y-3">
+                  <label className="block">
+                    <div className="mb-1 text-xs text-zinc-400">Title *</div>
+                    <input
+                      value={adminDraft.title}
+                      onChange={(e) => setAdminDraft((p) => ({ ...p, title: e.target.value }))}
+                      className={cn(
+                        "h-12 w-full rounded-2xl border bg-black/30 px-4 text-sm outline-none",
+                        "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
+                      )}
+                    />
+                  </label>
+
+                  <label className="block">
+                    <div className="mb-1 text-xs text-zinc-400">Description</div>
+                    <textarea
+                      value={adminDraft.description}
+                      onChange={(e) => setAdminDraft((p) => ({ ...p, description: e.target.value }))}
+                      rows={3}
+                      className={cn(
+                        "w-full rounded-2xl border bg-black/30 px-4 py-3 text-sm outline-none",
+                        "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
+                      )}
+                      maxLength={500}
+                    />
+                  </label>
+
+                  <label className="block">
+                    <div className="mb-1 text-xs text-zinc-400">Instructions</div>
+                    <textarea
+                      value={adminDraft.instructions}
+                      onChange={(e) => setAdminDraft((p) => ({ ...p, instructions: e.target.value }))}
+                      rows={4}
+                      className={cn(
+                        "w-full rounded-2xl border bg-black/30 px-4 py-3 text-sm outline-none",
+                        "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
+                      )}
+                      maxLength={1500}
+                    />
+                  </label>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className="block">
+                      <div className="mb-1 text-xs text-zinc-400">Min tier</div>
+                      <select
+                        value={adminDraft.minTier}
+                        onChange={(e) => setAdminDraft((p) => ({ ...p, minTier: e.target.value }))}
+                        className={cn(
+                          "h-12 w-full rounded-2xl border bg-black/30 px-4 text-sm outline-none",
+                          "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
+                        )}
+                      >
+                        <option value="">None</option>
+                        <option value="bronze">Bronze</option>
+                        <option value="silver">Silver</option>
+                        <option value="gold">Gold</option>
+                        <option value="platinum">Platinum</option>
+                        <option value="diamond">Diamond</option>
+                      </select>
+                    </label>
+
+                    <label className="block">
+                      <div className="mb-1 text-xs text-zinc-400">Max winners</div>
+                      <input
+                        value={adminDraft.maxWinners}
+                        onChange={(e) => setAdminDraft((p) => ({ ...p, maxWinners: e.target.value }))}
+                        inputMode="numeric"
+                        className={cn(
+                          "h-12 w-full rounded-2xl border bg-black/30 px-4 text-sm outline-none",
+                          "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
+                        )}
+                      />
+                    </label>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className="block">
+                      <div className="mb-1 text-xs text-zinc-400">Reward</div>
+                      <input
+                        value={adminDraft.reward}
+                        onChange={(e) => setAdminDraft((p) => ({ ...p, reward: e.target.value }))}
+                        inputMode="decimal"
+                        className={cn(
+                          "h-12 w-full rounded-2xl border bg-black/30 px-4 text-sm outline-none",
+                          "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
+                        )}
+                      />
+                    </label>
+
+                    <label className="block">
+                      <div className="mb-1 text-xs text-zinc-400">Currency</div>
+                      <input
+                        value={adminDraft.currency}
+                        onChange={(e) => setAdminDraft((p) => ({ ...p, currency: e.target.value }))}
+                        placeholder="USDC"
+                        className={cn(
+                          "h-12 w-full rounded-2xl border bg-black/30 px-4 text-sm outline-none",
+                          "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
+                        )}
+                      />
+                    </label>
+                  </div>
+
+                  <label className="block">
+                    <div className="mb-1 text-xs text-zinc-400">Link URL</div>
+                    <input
+                      value={adminDraft.linkUrl}
+                      onChange={(e) => setAdminDraft((p) => ({ ...p, linkUrl: e.target.value }))}
+                      placeholder="https://…"
+                      className={cn(
+                        "h-12 w-full rounded-2xl border bg-black/30 px-4 text-sm outline-none",
+                        "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
+                      )}
+                    />
+                  </label>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className="block">
+                      <div className="mb-1 text-xs text-zinc-400">Starts (optional)</div>
+                      <input
+                        value={adminDraft.startsAt}
+                        onChange={(e) => setAdminDraft((p) => ({ ...p, startsAt: e.target.value }))}
+                        type="datetime-local"
+                        className={cn(
+                          "h-12 w-full rounded-2xl border bg-black/30 px-4 text-sm outline-none",
+                          "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
+                        )}
+                      />
+                    </label>
+
+                    <label className="block">
+                      <div className="mb-1 text-xs text-zinc-400">Ends (optional)</div>
+                      <input
+                        value={adminDraft.endsAt}
+                        onChange={(e) => setAdminDraft((p) => ({ ...p, endsAt: e.target.value }))}
+                        type="datetime-local"
+                        className={cn(
+                          "h-12 w-full rounded-2xl border bg-black/30 px-4 text-sm outline-none",
+                          "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
+                        )}
+                      />
+                    </label>
+                  </div>
+
+                  {/* Questions */}
+                  <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm font-semibold">Application questions</div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setAdminDraft((p) => ({
+                            ...p,
+                            questions: [
+                              ...p.questions,
+                              {
+                                id: makeId("q"),
+                                type: "text",
+                                label: "",
+                                required: false,
+                                placeholder: "",
+                                maxLen: "",
+                                optionsCsv: "",
+                              },
+                            ],
+                          }))
+                        }
+                        className="h-9 rounded-xl border border-white/10 bg-white/5 px-3 text-xs font-semibold text-zinc-200 hover:bg-white/10"
+                      >
+                        + Add
+                      </button>
+                    </div>
+
+                    <div className="mt-3 space-y-3">
+                      {(adminDraft.questions || []).map((q, idx) => (
+                        <div key={q.id} className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-xs text-zinc-400">Question {idx + 1}</div>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setAdminDraft((p) => ({ ...p, questions: p.questions.filter((x) => x.id !== q.id) }))
+                              }
+                              className="h-8 rounded-xl border border-white/10 bg-white/5 px-3 text-xs font-semibold text-zinc-200 hover:bg-white/10"
+                            >
+                              Remove
+                            </button>
+                          </div>
+
+                          <div className="mt-3 grid grid-cols-2 gap-3">
+                            <label className="block">
+                              <div className="mb-1 text-xs text-zinc-400">Type</div>
+                              <select
+                                value={q.type}
+                                onChange={(e) =>
+                                  setAdminDraft((p) => ({
+                                    ...p,
+                                    questions: p.questions.map((x) =>
+                                      x.id === q.id ? { ...x, type: e.target.value as any } : x
+                                    ),
+                                  }))
+                                }
+                                className={cn(
+                                  "h-11 w-full rounded-2xl border bg-black/30 px-3 text-sm outline-none",
+                                  "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
+                                )}
+                              >
+                                <option value="text">Text</option>
+                                <option value="textarea">Textarea</option>
+                                <option value="select">Select</option>
+                              </select>
+                            </label>
+
+                            <label className="block">
+                              <div className="mb-1 text-xs text-zinc-400">Required</div>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setAdminDraft((p) => ({
+                                    ...p,
+                                    questions: p.questions.map((x) =>
+                                      x.id === q.id ? { ...x, required: !x.required } : x
+                                    ),
+                                  }))
+                                }
+                                className={cn(
+                                  "h-11 w-full rounded-2xl border px-3 text-sm font-semibold",
+                                  "border-white/10 bg-black/30 hover:bg-white/5",
+                                  q.required ? "text-emerald-200" : "text-zinc-200"
+                                )}
+                              >
+                                {q.required ? "Yes (required)" : "No (optional)"}
+                              </button>
+                            </label>
+                          </div>
+
+                          <label className="mt-3 block">
+                            <div className="mb-1 text-xs text-zinc-400">Label</div>
+                            <input
+                              value={q.label}
+                              onChange={(e) =>
+                                setAdminDraft((p) => ({
+                                  ...p,
+                                  questions: p.questions.map((x) => (x.id === q.id ? { ...x, label: e.target.value } : x)),
+                                }))
+                              }
+                              placeholder="e.g. Proof link"
+                              className={cn(
+                                "h-11 w-full rounded-2xl border bg-black/30 px-3 text-sm outline-none",
+                                "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
+                              )}
+                            />
+                          </label>
+
+                          {q.type === "select" ? (
+                            <label className="mt-3 block">
+                              <div className="mb-1 text-xs text-zinc-400">Options (comma separated)</div>
+                              <input
+                                value={q.optionsCsv}
+                                onChange={(e) =>
+                                  setAdminDraft((p) => ({
+                                    ...p,
+                                    questions: p.questions.map((x) =>
+                                      x.id === q.id ? { ...x, optionsCsv: e.target.value } : x
+                                    ),
+                                  }))
+                                }
+                                placeholder="Option A, Option B"
+                                className={cn(
+                                  "h-11 w-full rounded-2xl border bg-black/30 px-3 text-sm outline-none",
+                                  "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
+                                )}
+                              />
+                            </label>
+                          ) : (
+                            <div className="mt-3 grid grid-cols-2 gap-3">
+                              <label className="block">
+                                <div className="mb-1 text-xs text-zinc-400">Placeholder</div>
+                                <input
+                                  value={q.placeholder}
+                                  onChange={(e) =>
+                                    setAdminDraft((p) => ({
+                                      ...p,
+                                      questions: p.questions.map((x) =>
+                                        x.id === q.id ? { ...x, placeholder: e.target.value } : x
+                                      ),
+                                    }))
+                                  }
+                                  placeholder="Type your answer…"
+                                  className={cn(
+                                    "h-11 w-full rounded-2xl border bg-black/30 px-3 text-sm outline-none",
+                                    "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
+                                  )}
+                                />
+                              </label>
+
+                              <label className="block">
+                                <div className="mb-1 text-xs text-zinc-400">Max length</div>
+                                <input
+                                  value={q.maxLen}
+                                  onChange={(e) =>
+                                    setAdminDraft((p) => ({
+                                      ...p,
+                                      questions: p.questions.map((x) =>
+                                        x.id === q.id ? { ...x, maxLen: e.target.value } : x
+                                      ),
+                                    }))
+                                  }
+                                  inputMode="numeric"
+                                  placeholder="e.g. 240"
+                                  className={cn(
+                                    "h-11 w-full rounded-2xl border bg-black/30 px-3 text-sm outline-none",
+                                    "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
+                                  )}
+                                />
+                              </label>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={!adminSid || adminCreateLoading}
+                    onClick={adminCreateBounty}
+                    className={cn(
+                      "h-12 w-full rounded-2xl text-sm font-semibold",
+                      !adminSid || adminCreateLoading
+                        ? "border border-white/10 bg-white/5 text-zinc-400"
+                        : "bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:brightness-110 active:scale-[0.99]"
+                    )}
+                  >
+                    {adminCreateLoading ? "Creating…" : "Create bounty"}
+                  </button>
+
+                  <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-zinc-300">
+                    Uses <span className="font-mono">/api/tg/admin/bounties/create</span> with headers{" "}
+                    <span className="font-mono">x-admin-sid</span> / <span className="font-mono">x-app-sid</span>.
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {/* === END: ADMIN_CREATE_SHEET === */}
 
       {/* === START: BOUNTY_DETAILS_SHEET === */}
       {detailsOpen && selected ? (
@@ -659,7 +1322,10 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
                 </button>
               </div>
 
-              <div className="mt-3 max-h-[70vh] overflow-y-auto overscroll-contain pb-4" style={{ WebkitOverflowScrolling: "touch" as any }}>
+              <div
+                className="mt-3 max-h-[70vh] overflow-y-auto overscroll-contain pb-4"
+                style={{ WebkitOverflowScrolling: "touch" as any }}
+              >
                 {selected.description ? (
                   <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
                     <div className="text-[11px] text-zinc-500">About</div>
@@ -715,19 +1381,50 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
                 </div>
 
                 <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  <button
-                    type="button"
-                    disabled={applyLoading || !canApply(selectedAny).ok}
-                    onClick={() => startApply(selectedAny)}
-                    className={cn(
-                      "h-12 rounded-2xl text-sm font-semibold active:scale-[0.99]",
-                      applyLoading || !canApply(selectedAny).ok
-                        ? "border border-white/10 bg-white/5 text-zinc-400"
-                        : "bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:brightness-110"
-                    )}
-                  >
-                    {applyLoading ? "Starting…" : canApply(selectedAny).ok ? "Apply" : canApply(selectedAny).reason || "Not eligible"}
-                  </button>
+                  {!isAdmin ? (
+                    <button
+                      type="button"
+                      disabled={applyLoading || !canApply(selectedAny).ok}
+                      onClick={() => startApply(selectedAny)}
+                      className={cn(
+                        "h-12 rounded-2xl text-sm font-semibold active:scale-[0.99]",
+                        applyLoading || !canApply(selectedAny).ok
+                          ? "border border-white/10 bg-white/5 text-zinc-400"
+                          : "bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:brightness-110"
+                      )}
+                    >
+                      {applyLoading
+                        ? "Starting…"
+                        : canApply(selectedAny).ok
+                        ? "Apply"
+                        : canApply(selectedAny).reason || "Not eligible"}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        closeDetails();
+                        setAdminCreateErr("");
+                        setAdminCreateOk("");
+                        setAdminDraft((p) => ({
+                          ...p,
+                          title: String(selectedAny?.title || ""),
+                          description: String(selectedAny?.description || ""),
+                          instructions: String(selectedAny?.instructions || ""),
+                          minTier: String(selectedAny?.min_tier || "bronze"),
+                          reward: selectedAny?.reward ? String(selectedAny.reward) : "10",
+                          currency: String(selectedAny?.currency || "USDC"),
+                          linkUrl: String(selectedAny?.link_url || ""),
+                          maxWinners: selectedAny?.max_winners ? String(selectedAny.max_winners) : "10",
+                        }));
+                        setAdminCreateOpen(true);
+                      }}
+                      className="h-12 rounded-2xl border border-white/10 bg-white/5 text-sm font-semibold text-zinc-200 hover:bg-white/10 active:scale-[0.99]"
+                      title="Quick duplicate as a new bounty"
+                    >
+                      Duplicate as new
+                    </button>
+                  )}
 
                   <button
                     type="button"
@@ -737,6 +1434,12 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
                     Back
                   </button>
                 </div>
+
+                {isAdmin ? (
+                  <div className="mt-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-zinc-300">
+                    Admin note: Apply is disabled here. Users apply in user mini app.
+                  </div>
+                ) : null}
               </div>
             </div>
           </div>
@@ -744,10 +1447,15 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
       ) : null}
       {/* === END: BOUNTY_DETAILS_SHEET === */}
 
-      {/* === START: APPLY_SHEET === */}
-      {applyOpen && applySession ? (
+      {/* === START: APPLY_SHEET (USER ONLY) === */}
+      {applyOpen && applySession && !isAdmin ? (
         <div className="fixed inset-0 z-[90]">
-          <button type="button" aria-label="Close apply" onClick={closeApply} className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+          <button
+            type="button"
+            aria-label="Close apply"
+            onClick={closeApply}
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+          />
 
           <div className="absolute bottom-0 left-0 right-0 mx-auto w-full max-w-3xl">
             <div className="rounded-t-3xl border border-white/10 bg-[#070A0D]/95 p-4 shadow-2xl">
@@ -786,7 +1494,10 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
                 <div className="mt-3 rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">{applyOk}</div>
               ) : null}
 
-              <div className="mt-3 max-h-[70vh] overflow-y-auto overscroll-contain pb-4" style={{ WebkitOverflowScrolling: "touch" as any }}>
+              <div
+                className="mt-3 max-h-[70vh] overflow-y-auto overscroll-contain pb-4"
+                style={{ WebkitOverflowScrolling: "touch" as any }}
+              >
                 {applySession.bounty.instructions ? (
                   <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
                     <div className="text-[11px] text-zinc-500">Instructions</div>
@@ -892,8 +1603,6 @@ export default function BountiesTab({ initData, sid }: { initData?: string | nul
                   >
                     {applyLoading ? "Submitting…" : "Submit application"}
                   </button>
-
-                  {/* Debug removed (per request) */}
                 </div>
               </div>
             </div>
