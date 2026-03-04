@@ -1,4 +1,4 @@
-// === START: FILE_useBounties.ts ===
+// === START: FILE_src/app/tg/_hooks/useBounties.ts ===
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -34,12 +34,21 @@ export type Bounty = {
 
 type UseBountiesArgs = {
   initData?: string | null;
-  sid?: string | null; // optional (future scoping)
+
+  // user session (optional)
+  sid?: string | null;
+
+  // admin mode support
+  isAdmin?: boolean;
+  adminSid?: string | null;
 };
 
 export function useBounties(args: UseBountiesArgs) {
   const initData = (args.initData || "").trim();
   const sid = (args.sid || "").trim();
+
+  const isAdmin = !!args.isAdmin;
+  const adminSid = (args.adminSid || "").trim();
 
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -66,10 +75,29 @@ export function useBounties(args: UseBountiesArgs) {
         "x-tg-init-data": initData,
       };
 
-      // optional (keep for future); harmless if backend ignores it
+      // base endpoint (user)
+      let url = "/api/tg/bounties";
+
+      // optional user sid (harmless if backend ignores it)
       if (sid) headers["x-app-sid"] = sid;
 
-      const res = await fetch("/api/tg/bounties", {
+      // admin list endpoint requires admin session headers
+      if (isAdmin) {
+        url = "/api/tg/admin/bounties";
+
+        // your backend checks x-admin-sid; we also mirror it to x-app-sid
+        // because some handlers accept either
+        if (adminSid) {
+          headers["x-admin-sid"] = adminSid;
+          headers["x-app-sid"] = adminSid;
+        }
+      }
+
+      // IMPORTANT (Telegram iOS WebView): absolute URL avoids occasional "Load failed"
+      const apiUrl =
+        typeof window !== "undefined" ? new URL(url, window.location.origin).toString() : url;
+
+      const res = await fetch(apiUrl, {
         method: "GET",
         headers,
         cache: "no-store",
@@ -101,7 +129,7 @@ export function useBounties(args: UseBountiesArgs) {
     } finally {
       setLoading(false);
     }
-  }, [canLoad, initData, sid]);
+  }, [canLoad, initData, sid, isAdmin, adminSid]);
 
   useEffect(() => {
     // initial load when initData becomes available
@@ -121,4 +149,4 @@ export function useBounties(args: UseBountiesArgs) {
     canLoad,
   };
 }
-// === END: FILE_useBounties.ts ===
+// === END: FILE_src/app/tg/_hooks/useBounties.ts ===

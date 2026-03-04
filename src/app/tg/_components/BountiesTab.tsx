@@ -304,7 +304,12 @@ export default function BountiesTab({
   isAdmin?: boolean;
   adminSid?: string;
 }) {
-  const { loading, err, list, refresh } = useBounties({ initData, sid });
+  const { loading, err, list, refresh } = useBounties({
+  initData,
+  sid,
+  isAdmin,
+  adminSid,
+});
 
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selected, setSelected] = useState<Bounty | null>(null);
