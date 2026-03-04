@@ -2621,7 +2621,7 @@ return (
             ) : null}
           </section>
         )}
-// === PATCH START: BOUNTIES_TAB_PROPS ===
+
 {tab === "bounties" && (
   <BountiesTab
     initData={initData}
@@ -2630,7 +2630,7 @@ return (
     adminSid={adminSession?.sid || ""} // empty if not ready
   />
 )}
-// === PATCH END ===
+
       </main>
 
       {/* Bottom nav */}
