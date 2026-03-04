@@ -105,6 +105,27 @@ function pickInitDataFromReq(req: Request, body: any) {
   return candidates[0] || "";
 }
 
+/** Supports either: bounty.questions (jsonb array) OR bounty.application_schema (array or {questions:[...]}) */
+function extractQuestions(bounty: any): any[] {
+  const direct = bounty?.questions;
+  if (Array.isArray(direct) && direct.length > 0) return direct;
+
+  const schema = bounty?.application_schema;
+  if (Array.isArray(schema) && schema.length > 0) return schema;
+  if (schema && Array.isArray(schema?.questions) && schema.questions.length > 0) return schema.questions;
+
+  return [];
+}
+
+/** Prefer new column `instructions`, fall back to legacy `how_to` */
+function extractInstructions(bounty: any): string | null {
+  const a = String(bounty?.instructions || "").trim();
+  if (a) return a;
+  const b = String(bounty?.how_to || "").trim();
+  if (b) return b;
+  return null;
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
@@ -120,22 +141,26 @@ export async function POST(req: Request) {
     const telegram_user_id = v.user?.id ? Number(v.user.id) : null;
     if (!telegram_user_id) return NextResponse.json({ ok: false, error: "missing user id" }, { status: 401 });
 
-    // Pull bounty + schema
+    // Pull bounty + schema (support both old and new column names)
     const { data: bounty, error: bErr } = await supabaseAdmin
       .from("bounties")
       .select(
-        "id, title, description, how_to, min_tier, reward, currency, starts_at, ends_at, published, status, link_url, max_winners, application_schema"
+        "id, title, description, instructions, how_to, min_tier, reward, currency, starts_at, ends_at, published, status, link_url, max_winners, questions, application_schema"
       )
       .eq("id", bounty_id)
       .maybeSingle();
 
     if (bErr) throw new Error(bErr.message);
     if (!bounty?.id) return NextResponse.json({ ok: false, error: "bounty not found" }, { status: 404 });
-    if (bounty.published === false) return NextResponse.json({ ok: false, error: "bounty not published" }, { status: 403 });
+    if (bounty.published === false)
+      return NextResponse.json({ ok: false, error: "bounty not published" }, { status: 403 });
 
     const bountyStatus = String((bounty as any)?.status || "open").toLowerCase();
     if (bountyStatus !== "open") {
-      return NextResponse.json({ ok: false, error: bountyStatus === "paused" ? "bounty paused" : "bounty closed" }, { status: 403 });
+      return NextResponse.json(
+        { ok: false, error: bountyStatus === "paused" ? "bounty paused" : "bounty closed" },
+        { status: 403 }
+      );
     }
     const w = withinWindow((bounty as any)?.starts_at ?? null, (bounty as any)?.ends_at ?? null);
     if (!w.ok) return NextResponse.json({ ok: false, error: w.reason }, { status: 403 });
@@ -161,7 +186,8 @@ export async function POST(req: Request) {
 
     if (!wallet) return NextResponse.json({ ok: false, error: "no verified wallet (verify in bot first)" }, { status: 403 });
     if (!tier) return NextResponse.json({ ok: false, error: "tier not loaded yet (run Check once)" }, { status: 403 });
-    if (!Number.isFinite(fairscore as any)) return NextResponse.json({ ok: false, error: "score not loaded yet (run Check once)" }, { status: 403 });
+    if (!Number.isFinite(fairscore as any))
+      return NextResponse.json({ ok: false, error: "score not loaded yet (run Check once)" }, { status: 403 });
 
     if (!tierMeets(tier, (bounty as any)?.min_tier || null)) {
       return NextResponse.json(
@@ -186,15 +212,9 @@ export async function POST(req: Request) {
 
     if (sErr) throw new Error(sErr.message);
 
-    // Questions schema (supports either [..] or {questions:[..]})
-    const questions = Array.isArray((bounty as any)?.application_schema)
-      ? (bounty as any).application_schema
-      : Array.isArray((bounty as any)?.application_schema?.questions)
-        ? (bounty as any).application_schema.questions
-        : [];
-
-    // Frontend expects `instructions`
-    const instructions = String((bounty as any)?.how_to || "").trim() || null;
+    // Extract questions/instructions with compatibility across schema versions
+    const questions = extractQuestions(bounty as any);
+    const instructions = extractInstructions(bounty as any);
 
     return NextResponse.json({
       ok: true,
@@ -204,8 +224,11 @@ export async function POST(req: Request) {
           id: bounty.id,
           title: (bounty as any).title ?? null,
           description: (bounty as any).description ?? null,
+
+          // keep legacy + normalized fields for compatibility
           how_to: (bounty as any).how_to ?? null,
           instructions,
+
           min_tier: (bounty as any).min_tier ?? null,
           reward: (bounty as any).reward ?? null,
           currency: (bounty as any).currency ?? null,
@@ -214,6 +237,7 @@ export async function POST(req: Request) {
           status: (bounty as any).status ?? null,
           link_url: (bounty as any).link_url ?? null,
           max_winners: (bounty as any).max_winners ?? null,
+
           questions,
         },
         profile: {
