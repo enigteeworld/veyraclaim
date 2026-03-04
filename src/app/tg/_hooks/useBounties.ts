@@ -1,46 +1,42 @@
-// === START: FILE_src/app/tg/_hooks/useBounties.ts ===
+// === START: FILE_useBounties.ts ===
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-
-export type AppQuestion =
-  | { id: string; type: "text"; label: string; required?: boolean; placeholder?: string; maxLen?: number }
-  | { id: string; type: "textarea"; label: string; required?: boolean; placeholder?: string; maxLen?: number }
-  | { id: string; type: "select"; label: string; required?: boolean; options: string[] };
 
 export type Bounty = {
   id: string;
   code?: string | null;
   title?: string | null;
 
+  // core
   description?: string | null;
-  instructions?: string | null;
-
-  reward?: number | string | null;
+  reward?: string | number | null;
   currency?: string | null;
-
   min_tier?: string | null;
   status?: "open" | "closed" | "paused" | string | null;
+  published?: boolean | null;
+  application_schema?: any;
+  created_at?: string | null;
 
+  // richer details (for “View details”)
+  how_to?: string | null;
+  rules?: string | null;
   link_url?: string | null;
   max_winners?: number | null;
   starts_at?: string | null;
   ends_at?: string | null;
 
-  questions?: AppQuestion[] | null;
-
-  created_at?: string | null;
-
-  // attribution / display
+  // attribution / ownership
+  project_id?: string | null;
   posted_by_type?: "veyra" | "project" | string | null;
   posted_by_name?: string | null;
 };
 
 type UseBountiesArgs = {
   initData?: string | null;
-  sid?: string | null;
+  sid?: string | null; // user session (optional)
 
-  // ✅ IMPORTANT: admin list must use /api/tg/admin/bounties + x-admin-sid
+  // admin mode (optional)
   isAdmin?: boolean;
   adminSid?: string | null;
 };
@@ -97,126 +93,169 @@ function tgInitHeaders(initData: string) {
   } as Record<string, string>;
 }
 
-function pickRows(json: any): any[] {
-  if (Array.isArray(json)) return json;
-  if (Array.isArray(json?.bounties)) return json.bounties;
-  if (Array.isArray(json?.list)) return json.list;
-  if (Array.isArray(json?.items)) return json.items;
-  if (Array.isArray(json?.data)) return json.data;
-  return [];
+function pickRows(json: any): Bounty[] {
+  const rows: Bounty[] = Array.isArray(json)
+    ? (json as any)
+    : Array.isArray(json?.bounties)
+    ? json.bounties
+    : Array.isArray(json?.list)
+    ? json.list
+    : Array.isArray(json?.items)
+    ? json.items
+    : Array.isArray(json?.data)
+    ? json.data
+    : [];
+
+  return Array.isArray(rows) ? rows : [];
+}
+
+async function readJsonSafe(res: Response) {
+  const j = await res.json().catch(() => null);
+  return j ?? null;
 }
 
 export function useBounties(args: UseBountiesArgs) {
   const isAdmin = !!args.isAdmin;
   const adminSid = (args.adminSid || "").trim();
-
-  const initDataProp = (args.initData || "").trim();
   const sid = (args.sid || "").trim();
+
+  // We intentionally DO NOT trust args.initData to always be present.
+  // We'll try to grab initData from Telegram WebApp at runtime.
+  const initDataProp = (args.initData || "").trim();
 
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [list, setList] = useState<Bounty[]>([]);
   const [lastLoadedAt, setLastLoadedAt] = useState<number>(0);
 
-  // prevent double-load thrash on fast re-renders
-  const inflightRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const canLoad = useMemo(() => {
-    // Admin list should still load even if initData is missing (admin route checks sid),
-    // but it MUST have adminSid.
-    if (isAdmin) return Boolean(adminSid);
-    // User list needs initData (your /api/tg/bounties likely verifies initData)
-    return Boolean(initDataProp);
-  }, [isAdmin, adminSid, initDataProp]);
+    // If initData is missing but Telegram script can provide it, we still allow load.
+    // We'll block only on the server (where window is undefined).
+    if (typeof window === "undefined") return Boolean(initDataProp);
+    return true;
+  }, [initDataProp]);
 
   const refresh = useCallback(() => {
     setLastLoadedAt(Date.now());
   }, []);
 
-  async function getBestInitData(): Promise<string> {
+  const getBestInitData = useCallback(async () => {
     await ensureTelegramScript();
     const tg = getTg();
-    const id = (tg?.initData || initDataProp || "").toString();
+    const id = (tg?.initData || initDataProp || "").toString().trim();
     return id;
-  }
+  }, [initDataProp]);
 
-  const load = useCallback(async () => {
-    if (!canLoad) return;
-
-    // cancel previous inflight
-    try {
-      inflightRef.current?.abort();
-    } catch {}
-    const ac = new AbortController();
-    inflightRef.current = ac;
-
-    setLoading(true);
-    setErr(null);
-
-    try {
-      const initData = await getBestInitData();
+  const fetchList = useCallback(
+    async (mode: "admin" | "public") => {
+      const id = await getBestInitData();
+      if (!id) throw new Error("Telegram initData missing. Reopen the mini app.");
 
       const headers: Record<string, string> = {
-        "content-type": "application/json",
-        ...tgInitHeaders(initData),
+        ...tgInitHeaders(id),
       };
 
-      // keep for user flow / future scoping
-      if (sid) headers["x-app-sid"] = sid;
-
-      // ✅ Admin list
+      // IMPORTANT:
+      // - Only attach admin headers when we are explicitly calling admin endpoint.
+      // - Do NOT attach x-app-sid in public mode (some backends accidentally interpret it as admin/user session lookup).
       let url = "/api/tg/bounties";
-      if (isAdmin) {
+
+      if (mode === "admin") {
         url = "/api/tg/admin/bounties";
-        headers["x-admin-sid"] = adminSid;
-        headers["x-app-sid"] = adminSid; // your backend getSid() checks both
+
+        if (adminSid) {
+          headers["x-admin-sid"] = adminSid;
+          headers["x-app-sid"] = adminSid;
+        }
+
+        // fallback: some handlers read sid from query (harmless if ignored)
+        if (adminSid) url += `?sid=${encodeURIComponent(adminSid)}`;
       }
 
-      const res = await fetch(url, {
-        method: "GET",
-        headers,
-        cache: "no-store",
-        signal: ac.signal,
-      });
+      // optional: user scoping (only if you really use it server-side)
+      // keep it mild: query param rather than forcing server joins
+      if (mode === "public" && sid) {
+        // if your backend ignores this, no problem
+        url += `${url.includes("?") ? "&" : "?"}app_sid=${encodeURIComponent(sid)}`;
+      }
 
-      const json = await res.json().catch(() => ({} as any));
+      const res = await fetch(url, { method: "GET", headers, cache: "no-store" });
+      const json = await readJsonSafe(res);
 
       if (!res.ok || json?.ok === false) {
         throw new Error(json?.error || `Failed to load bounties (${res.status})`);
       }
 
-      const rows = pickRows(json);
-      if (!Array.isArray(rows)) throw new Error("Invalid bounties payload.");
+      return pickRows(json);
+    },
+    [adminSid, getBestInitData, sid]
+  );
 
-      setList(rows as Bounty[]);
+  const load = useCallback(async () => {
+    if (!canLoad) return;
+
+    setLoading(true);
+    setErr(null);
+
+    try {
+      // Admin panel:
+      // - Prefer admin endpoint IF adminSid exists
+      // - If it fails (e.g. server schema mismatch like telegram_admin_sessions / app_sessions.sid),
+      //   fall back to public endpoint so the admin can still *see* bounties.
+      if (isAdmin && adminSid) {
+        try {
+          const rows = await fetchList("admin");
+          if (!mountedRef.current) return;
+          setList(rows);
+          setErr(null);
+        } catch (e: any) {
+          // fallback to public list
+          const adminMsg = e?.message || "Admin bounties failed";
+          try {
+            const rows2 = await fetchList("public");
+            if (!mountedRef.current) return;
+            setList(rows2);
+            setErr(`Admin list failed: ${adminMsg}`);
+          } catch (e2: any) {
+            if (!mountedRef.current) return;
+            setList([]);
+            setErr(adminMsg);
+          }
+        }
+        return;
+      }
+
+      // Public (user mini app OR admin without adminSid yet)
+      const rows = await fetchList("public");
+      if (!mountedRef.current) return;
+      setList(rows);
     } catch (e: any) {
-      // ignore abort errors
-      const msg = String(e?.message || "");
-      if (msg.toLowerCase().includes("aborted")) return;
-
-      setErr(msg || "Failed to load bounties");
+      if (!mountedRef.current) return;
+      setErr(e?.message || "Failed to load bounties");
       setList([]);
     } finally {
+      if (!mountedRef.current) return;
       setLoading(false);
     }
-  }, [canLoad, isAdmin, adminSid, sid, initDataProp]);
+  }, [adminSid, canLoad, fetchList, isAdmin]);
 
   useEffect(() => {
+    // initial load
     if (canLoad) load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canLoad, load]);
 
   useEffect(() => {
+    // manual refresh
     if (lastLoadedAt) load();
   }, [lastLoadedAt, load]);
-
-  useEffect(() => {
-    return () => {
-      try {
-        inflightRef.current?.abort();
-      } catch {}
-    };
-  }, []);
 
   return {
     loading,
@@ -226,4 +265,4 @@ export function useBounties(args: UseBountiesArgs) {
     canLoad,
   };
 }
-// === END: FILE_src/app/tg/_hooks/useBounties.ts ===
+// === END: FILE_useBounties.ts ===
