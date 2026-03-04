@@ -602,7 +602,7 @@ export default function BountiesTab({
       const id = await getBestInitData();
       if (!id) throw new Error("Telegram initData missing. Reopen the mini app.");
 
-      const res = await fetch("/api/tg/admin/bounties/create", {
+      const res = await fetch("/api/tg/admin/bounties", {
         method: "POST",
         headers: {
           "content-type": "application/json",
