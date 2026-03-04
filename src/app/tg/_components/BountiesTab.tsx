@@ -1,4 +1,3 @@
-// === START: FILE_src/app/tg/_components/BountiesTab.tsx ===
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -284,6 +283,44 @@ function adminDraftToQuestions(qs: AdminDraftQuestion[]): AppQuestion[] {
     });
 }
 
+/** Parse questions from ANY likely bounty field (handles backend mismatches) */
+function normalizeQuestionsAny(value: any): AppQuestion[] {
+  try {
+    const raw = typeof value === "string" ? JSON.parse(value) : value;
+
+    // Some backends store as { questions: [...] } or directly [...]
+    const arr = Array.isArray(raw) ? raw : Array.isArray(raw?.questions) ? raw.questions : [];
+
+    const out: AppQuestion[] = [];
+    for (const q of arr) {
+      const id = String(q?.id || "").trim();
+      const type = String(q?.type || "").toLowerCase();
+      const label = String(q?.label || "").trim();
+
+      if (!id || !label) continue;
+
+      const required = q?.required === undefined ? true : !!q.required;
+
+      if (type === "select") {
+        const options = Array.isArray(q?.options) ? q.options.map((x: any) => String(x).trim()).filter(Boolean) : [];
+        out.push({ id, type: "select", label, required, options: options.slice(0, 24) });
+      } else if (type === "textarea") {
+        const maxLen = Number.isFinite(Number(q?.maxLen)) ? Math.floor(Number(q.maxLen)) : undefined;
+        const placeholder = q?.placeholder ? String(q.placeholder).slice(0, 140) : undefined;
+        out.push({ id, type: "textarea", label, required, placeholder, maxLen });
+      } else {
+        const maxLen = Number.isFinite(Number(q?.maxLen)) ? Math.floor(Number(q.maxLen)) : undefined;
+        const placeholder = q?.placeholder ? String(q.placeholder).slice(0, 140) : undefined;
+        out.push({ id, type: "text", label, required, placeholder, maxLen });
+      }
+    }
+
+    return out.slice(0, 20);
+  } catch {
+    return [];
+  }
+}
+
 /**
  * FIX 1 (Admin/User flow):
  * - User mini app: can apply
@@ -305,11 +342,11 @@ export default function BountiesTab({
   adminSid?: string;
 }) {
   const { loading, err, list, refresh } = useBounties({
-  initData,
-  sid,
-  isAdmin,
-  adminSid,
-});
+    initData,
+    sid,
+    isAdmin,
+    adminSid,
+  });
 
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selected, setSelected] = useState<Bounty | null>(null);
@@ -500,9 +537,31 @@ export default function BountiesTab({
       if (!res.ok || !j?.ok) throw new Error(j?.error || `Could not start apply (${res.status})`);
 
       const session = j.data as BountyApplySession;
-      setApplySession(session);
 
-      const qs = (session?.bounty?.questions || []) as AppQuestion[];
+      // IMPORTANT FIX:
+      // If backend session response forgot to include bounty.questions (common mismatch),
+      // fall back to whatever we already have on the bounty object (questions/application_schema/etc).
+      const sessionQs = Array.isArray(session?.bounty?.questions) ? session.bounty.questions : [];
+      const fallbackQs =
+        sessionQs.length > 0
+          ? sessionQs
+          : normalizeQuestionsAny((b as any)?.questions) ||
+            normalizeQuestionsAny((b as any)?.application_schema) ||
+            normalizeQuestionsAny((b as any)?.applicationSchema) ||
+            normalizeQuestionsAny((b as any)?.application_schema_json) ||
+            [];
+
+      const patchedSession: BountyApplySession = {
+        ...session,
+        bounty: {
+          ...session.bounty,
+          questions: fallbackQs,
+        },
+      };
+
+      setApplySession(patchedSession);
+
+      const qs = (patchedSession?.bounty?.questions || []) as AppQuestion[];
       const initAns: Record<string, string> = {};
       for (const q of qs) initAns[q.id] = "";
       setAnswers(initAns);
@@ -645,6 +704,10 @@ export default function BountiesTab({
   const sPill = statusPill(selected?.status);
   const rewardText = selected ? fmtReward(selected) : null;
 
+  // iOS “shake/zoom” fix: ensure 16px font-size on inputs to prevent Safari auto-zoom
+  const input16 =
+    "text-[16px] [font-size:16px]"; // double to be safe in some webviews
+
   return (
     <>
       {/* === START: BOUNTIES_PANEL === */}
@@ -661,7 +724,7 @@ export default function BountiesTab({
             {/* === START: PROFILE_STRIP (USER ONLY) === */}
             {!isAdmin ? (
               <>
-                <div className="mt-3 rounded-2xl border border-white/10 bg-black/25 px-3 py-2 text-xs text-zinc-300 overflow-hidden">
+                <div className="mt-3 overflow-hidden rounded-2xl border border-white/10 bg-black/25 px-3 py-2 text-xs text-zinc-300">
                   {profileLoading ? (
                     <span className="text-zinc-400">Hydrating profile…</span>
                   ) : profile ? (
@@ -819,10 +882,8 @@ export default function BountiesTab({
                 <div key={b.id} className="rounded-2xl border border-white/10 bg-black/25 p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="text-sm font-semibold break-words">{b.title || "Bounty"}</div>
-                      {b.description ? (
-                        <div className="mt-1 text-sm text-zinc-400 break-words">{b.description}</div>
-                      ) : null}
+                      <div className="break-words text-sm font-semibold">{b.title || "Bounty"}</div>
+                      {b.description ? <div className="mt-1 break-words text-sm text-zinc-400">{b.description}</div> : null}
 
                       <div className="mt-2 text-xs text-zinc-500">
                         Code: <span className="font-mono">{b.code}</span>
@@ -946,7 +1007,8 @@ export default function BountiesTab({
                       value={adminDraft.title}
                       onChange={(e) => setAdminDraft((p) => ({ ...p, title: e.target.value }))}
                       className={cn(
-                        "h-12 w-full rounded-2xl border bg-black/30 px-4 text-sm outline-none",
+                        input16,
+                        "h-12 w-full rounded-2xl border bg-black/30 px-4 outline-none",
                         "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
                       )}
                     />
@@ -959,7 +1021,8 @@ export default function BountiesTab({
                       onChange={(e) => setAdminDraft((p) => ({ ...p, description: e.target.value }))}
                       rows={3}
                       className={cn(
-                        "w-full rounded-2xl border bg-black/30 px-4 py-3 text-sm outline-none",
+                        input16,
+                        "w-full rounded-2xl border bg-black/30 px-4 py-3 outline-none",
                         "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
                       )}
                       maxLength={500}
@@ -973,7 +1036,8 @@ export default function BountiesTab({
                       onChange={(e) => setAdminDraft((p) => ({ ...p, instructions: e.target.value }))}
                       rows={4}
                       className={cn(
-                        "w-full rounded-2xl border bg-black/30 px-4 py-3 text-sm outline-none",
+                        input16,
+                        "w-full rounded-2xl border bg-black/30 px-4 py-3 outline-none",
                         "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
                       )}
                       maxLength={1500}
@@ -987,7 +1051,8 @@ export default function BountiesTab({
                         value={adminDraft.minTier}
                         onChange={(e) => setAdminDraft((p) => ({ ...p, minTier: e.target.value }))}
                         className={cn(
-                          "h-12 w-full rounded-2xl border bg-black/30 px-4 text-sm outline-none",
+                          input16,
+                          "h-12 w-full rounded-2xl border bg-black/30 px-4 outline-none",
                           "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
                         )}
                       >
@@ -1007,7 +1072,8 @@ export default function BountiesTab({
                         onChange={(e) => setAdminDraft((p) => ({ ...p, maxWinners: e.target.value }))}
                         inputMode="numeric"
                         className={cn(
-                          "h-12 w-full rounded-2xl border bg-black/30 px-4 text-sm outline-none",
+                          input16,
+                          "h-12 w-full rounded-2xl border bg-black/30 px-4 outline-none",
                           "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
                         )}
                       />
@@ -1022,7 +1088,8 @@ export default function BountiesTab({
                         onChange={(e) => setAdminDraft((p) => ({ ...p, reward: e.target.value }))}
                         inputMode="decimal"
                         className={cn(
-                          "h-12 w-full rounded-2xl border bg-black/30 px-4 text-sm outline-none",
+                          input16,
+                          "h-12 w-full rounded-2xl border bg-black/30 px-4 outline-none",
                           "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
                         )}
                       />
@@ -1035,7 +1102,8 @@ export default function BountiesTab({
                         onChange={(e) => setAdminDraft((p) => ({ ...p, currency: e.target.value }))}
                         placeholder="USDC"
                         className={cn(
-                          "h-12 w-full rounded-2xl border bg-black/30 px-4 text-sm outline-none",
+                          input16,
+                          "h-12 w-full rounded-2xl border bg-black/30 px-4 outline-none",
                           "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
                         )}
                       />
@@ -1049,7 +1117,8 @@ export default function BountiesTab({
                       onChange={(e) => setAdminDraft((p) => ({ ...p, linkUrl: e.target.value }))}
                       placeholder="https://…"
                       className={cn(
-                        "h-12 w-full rounded-2xl border bg-black/30 px-4 text-sm outline-none",
+                        input16,
+                        "h-12 w-full rounded-2xl border bg-black/30 px-4 outline-none",
                         "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
                       )}
                     />
@@ -1063,7 +1132,8 @@ export default function BountiesTab({
                         onChange={(e) => setAdminDraft((p) => ({ ...p, startsAt: e.target.value }))}
                         type="datetime-local"
                         className={cn(
-                          "h-12 w-full rounded-2xl border bg-black/30 px-4 text-sm outline-none",
+                          input16,
+                          "h-12 w-full rounded-2xl border bg-black/30 px-4 outline-none",
                           "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
                         )}
                       />
@@ -1076,7 +1146,8 @@ export default function BountiesTab({
                         onChange={(e) => setAdminDraft((p) => ({ ...p, endsAt: e.target.value }))}
                         type="datetime-local"
                         className={cn(
-                          "h-12 w-full rounded-2xl border bg-black/30 px-4 text-sm outline-none",
+                          input16,
+                          "h-12 w-full rounded-2xl border bg-black/30 px-4 outline-none",
                           "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
                         )}
                       />
@@ -1142,7 +1213,8 @@ export default function BountiesTab({
                                   }))
                                 }
                                 className={cn(
-                                  "h-11 w-full rounded-2xl border bg-black/30 px-3 text-sm outline-none",
+                                  input16,
+                                  "h-11 w-full rounded-2xl border bg-black/30 px-3 outline-none",
                                   "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
                                 )}
                               >
@@ -1165,7 +1237,8 @@ export default function BountiesTab({
                                   }))
                                 }
                                 className={cn(
-                                  "h-11 w-full rounded-2xl border px-3 text-sm font-semibold",
+                                  input16,
+                                  "h-11 w-full rounded-2xl border px-3 font-semibold",
                                   "border-white/10 bg-black/30 hover:bg-white/5",
                                   q.required ? "text-emerald-200" : "text-zinc-200"
                                 )}
@@ -1187,7 +1260,8 @@ export default function BountiesTab({
                               }
                               placeholder="e.g. Proof link"
                               className={cn(
-                                "h-11 w-full rounded-2xl border bg-black/30 px-3 text-sm outline-none",
+                                input16,
+                                "h-11 w-full rounded-2xl border bg-black/30 px-3 outline-none",
                                 "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
                               )}
                             />
@@ -1208,7 +1282,8 @@ export default function BountiesTab({
                                 }
                                 placeholder="Option A, Option B"
                                 className={cn(
-                                  "h-11 w-full rounded-2xl border bg-black/30 px-3 text-sm outline-none",
+                                  input16,
+                                  "h-11 w-full rounded-2xl border bg-black/30 px-3 outline-none",
                                   "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
                                 )}
                               />
@@ -1229,7 +1304,8 @@ export default function BountiesTab({
                                   }
                                   placeholder="Type your answer…"
                                   className={cn(
-                                    "h-11 w-full rounded-2xl border bg-black/30 px-3 text-sm outline-none",
+                                    input16,
+                                    "h-11 w-full rounded-2xl border bg-black/30 px-3 outline-none",
                                     "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
                                   )}
                                 />
@@ -1250,7 +1326,8 @@ export default function BountiesTab({
                                   inputMode="numeric"
                                   placeholder="e.g. 240"
                                   className={cn(
-                                    "h-11 w-full rounded-2xl border bg-black/30 px-3 text-sm outline-none",
+                                    input16,
+                                    "h-11 w-full rounded-2xl border bg-black/30 px-3 outline-none",
                                     "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
                                   )}
                                 />
@@ -1302,7 +1379,7 @@ export default function BountiesTab({
             <div className="rounded-t-3xl border border-white/10 bg-[#070A0D]/95 p-4 shadow-2xl">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="text-base font-semibold break-words">{selected.title || "Bounty"}</div>
+                  <div className="break-words text-base font-semibold">{selected.title || "Bounty"}</div>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <div className={pillBase(sPill.cls)}>{sPill.label}</div>
                     {selectedAny?.min_tier ? (
@@ -1466,8 +1543,10 @@ export default function BountiesTab({
             <div className="rounded-t-3xl border border-white/10 bg-[#070A0D]/95 p-4 shadow-2xl">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="text-base font-semibold break-words">{applySession.bounty.title || "Bounty application"}</div>
-                  <div className="mt-1 text-xs text-zinc-500 break-words">
+                  <div className="break-words text-base font-semibold">
+                    {applySession.bounty.title || "Bounty application"}
+                  </div>
+                  <div className="mt-1 break-words text-xs text-zinc-500">
                     Wallet:{" "}
                     <span className="font-mono" title={applySession.profile.wallet}>
                       {shortAddr(applySession.profile.wallet)}
@@ -1492,11 +1571,15 @@ export default function BountiesTab({
               </div>
 
               {applyErr ? (
-                <div className="mt-3 rounded-xl border border-red-500/25 bg-red-500/10 px-3 py-2 text-sm text-red-200">{applyErr}</div>
+                <div className="mt-3 rounded-xl border border-red-500/25 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+                  {applyErr}
+                </div>
               ) : null}
 
               {applyOk ? (
-                <div className="mt-3 rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">{applyOk}</div>
+                <div className="mt-3 rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
+                  {applyOk}
+                </div>
               ) : null}
 
               <div
@@ -1506,7 +1589,9 @@ export default function BountiesTab({
                 {applySession.bounty.instructions ? (
                   <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
                     <div className="text-[11px] text-zinc-500">Instructions</div>
-                    <div className="mt-1 whitespace-pre-wrap text-sm text-zinc-300">{applySession.bounty.instructions}</div>
+                    <div className="mt-1 whitespace-pre-wrap text-sm text-zinc-300">
+                      {applySession.bounty.instructions}
+                    </div>
                   </div>
                 ) : null}
 
@@ -1530,7 +1615,8 @@ export default function BountiesTab({
                               value={v}
                               onChange={(e) => setAnswers((p) => ({ ...p, [q.id]: e.target.value }))}
                               className={cn(
-                                "h-12 w-full rounded-2xl border bg-black/30 px-4 text-sm outline-none",
+                                input16,
+                                "h-12 w-full rounded-2xl border bg-black/30 px-4 outline-none",
                                 "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
                               )}
                             >
@@ -1557,7 +1643,8 @@ export default function BountiesTab({
                               rows={4}
                               placeholder={q.placeholder || "Type your answer…"}
                               className={cn(
-                                "w-full rounded-2xl border bg-black/30 px-4 py-3 text-sm outline-none",
+                                input16,
+                                "w-full rounded-2xl border bg-black/30 px-4 py-3 outline-none",
                                 "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
                               )}
                               maxLength={typeof q.maxLen === "number" ? q.maxLen : undefined}
@@ -1581,7 +1668,8 @@ export default function BountiesTab({
                             onChange={(e) => setAnswers((p) => ({ ...p, [q.id]: e.target.value }))}
                             placeholder={q.placeholder || "Type your answer…"}
                             className={cn(
-                              "h-12 w-full rounded-2xl border bg-black/30 px-4 text-sm outline-none",
+                              input16,
+                              "h-12 w-full rounded-2xl border bg-black/30 px-4 outline-none",
                               "border-white/10 focus:border-purple-500/40 focus:ring-2 focus:ring-purple-500/15"
                             )}
                             maxLength={typeof q.maxLen === "number" ? q.maxLen : undefined}
@@ -1618,4 +1706,3 @@ export default function BountiesTab({
     </>
   );
 }
-// === END: FILE_src/app/tg/_components/BountiesTab.tsx ===
