@@ -1199,7 +1199,10 @@ export default function BountiesTab({
                 </div>
               ) : null}
 
-              <div className="mt-3 max-h-[72vh] overflow-y-auto overscroll-contain pb-4" style={{ WebkitOverflowScrolling: "touch" as any }}>
+              <div
+                className="mt-3 max-h-[72vh] overflow-y-auto overscroll-contain pb-4"
+                style={{ WebkitOverflowScrolling: "touch" as any }}
+              >
                 <div className="space-y-3">
                   <label className="block">
                     <div className="mb-1 text-xs text-zinc-400">Title *</div>
@@ -1407,7 +1410,9 @@ export default function BountiesTab({
                                 onChange={(e) =>
                                   setAdminDraft((p) => ({
                                     ...p,
-                                    questions: p.questions.map((x) => (x.id === q.id ? { ...x, type: e.target.value as any } : x)),
+                                    questions: p.questions.map((x) =>
+                                      x.id === q.id ? { ...x, type: e.target.value as any } : x
+                                    ),
                                   }))
                                 }
                                 className={cn(
@@ -1777,9 +1782,7 @@ export default function BountiesTab({
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-base font-semibold">📥 Applications ({adminAppsCount})</div>
-                  <div className="mt-1 text-xs text-zinc-500">
-                    Showing applicants + answers (scrollable).
-                  </div>
+                  <div className="mt-1 text-xs text-zinc-500">Showing applicants + answers (scrollable).</div>
                 </div>
 
                 <button
@@ -1797,12 +1800,17 @@ export default function BountiesTab({
                 </div>
               ) : null}
 
-              <div className="mt-3 max-h-[70vh] overflow-y-auto overscroll-contain pb-4" style={{ WebkitOverflowScrolling: "touch" as any }}>
+              <div
+                className="mt-3 max-h-[70vh] overflow-y-auto overscroll-contain pb-4"
+                style={{ WebkitOverflowScrolling: "touch" as any }}
+              >
                 {adminApps.length === 0 ? (
                   <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-zinc-300">
                     No applications yet.
                     <div className="mt-1 text-xs text-zinc-500">
-                      If you *did* submit, this usually means the UI called the endpoint with the bounty <span className="font-mono">code</span> instead of <span className="font-mono">id</span>. This tab now calls using <span className="font-mono">bounty.id</span>.
+                      If you *did* submit, this usually means the UI called the endpoint with the bounty{" "}
+                      <span className="font-mono">code</span> instead of <span className="font-mono">id</span>. This tab now
+                      calls using <span className="font-mono">bounty.id</span>.
                     </div>
                   </div>
                 ) : (
@@ -1855,15 +1863,41 @@ export default function BountiesTab({
                             {keys.length === 0 ? (
                               <div className="mt-2 text-sm text-zinc-300">No answers stored.</div>
                             ) : (
-                              <div className="mt-2 space-y-2">
+                              <div className="mt-3 space-y-3">
                                 {keys.map((k) => {
                                   const label = questionLabelById[k] || k;
-                                  const v = prettyVal(ans[k]);
+                                  const raw = ans?.[k];
+                                  const v = prettyVal(raw);
+
+                                  const text = String(v ?? "").trim();
+
+                                  const isUrl =
+                                    text.startsWith("http://") ||
+                                    text.startsWith("https://") ||
+                                    text.startsWith("www.");
+
+                                  const href = text.startsWith("www.") ? `https://${text}` : text;
 
                                   return (
-                                    <div key={k} className="rounded-xl border border-white/10 bg-black/20 p-3">
-                                      <div className="text-xs font-semibold text-zinc-200">{label}</div>
-                                      <div className="mt-1 whitespace-pre-wrap text-sm text-zinc-300">{v || "—"}</div>
+                                    <div key={k} className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                                      <div className="text-[11px] text-zinc-400">{label}</div>
+
+                                      {text ? (
+                                        isUrl ? (
+                                          <a
+                                            href={href}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="mt-1 block break-words text-sm text-white underline underline-offset-4"
+                                          >
+                                            {text}
+                                          </a>
+                                        ) : (
+                                          <div className="mt-1 whitespace-pre-wrap break-words text-sm text-white">{text}</div>
+                                        )
+                                      ) : (
+                                        <div className="mt-1 text-sm text-white/50">—</div>
+                                      )}
                                     </div>
                                   );
                                 })}
