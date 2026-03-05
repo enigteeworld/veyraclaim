@@ -1,4 +1,4 @@
-// === START: FILE_src/app/(tg)/admin/_tabs/bounties/tab.tsx ===
+// === START: FILE_src/app/tg/_components/BountiesTab.tsx ===
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -322,12 +322,31 @@ function normalizeQuestionsAny(value: any): AppQuestion[] {
   }
 }
 
+function asObj(v: any): Record<string, any> {
+  if (!v) return {};
+  if (typeof v === "object" && !Array.isArray(v)) return v as any;
+  try {
+    const p = typeof v === "string" ? JSON.parse(v) : v;
+    if (p && typeof p === "object" && !Array.isArray(p)) return p;
+    return {};
+  } catch {
+    return {};
+  }
+}
+
+function prettyVal(v: any): string {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  try {
+    return JSON.stringify(v, null, 2);
+  } catch {
+    return String(v);
+  }
+}
+
 /**
- * FIX 1 (Admin/User flow):
- * - User mini app: can apply
- * - Admin panel: can create/manage; MUST NOT show apply flow
- *
- * This component now supports:
+ * Supports:
  *   <BountiesTab initData={...} sid={...} />
  *   <BountiesTab initData={...} sid={...} isAdmin adminSid={...} />
  */
@@ -352,12 +371,6 @@ export default function BountiesTab({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selected, setSelected] = useState<Bounty | null>(null);
 
-  // === ADMIN APPLICATION VIEW ===
-  const [appsOpen, setAppsOpen] = useState(false);
-  const [appsLoading, setAppsLoading] = useState(false);
-  const [appsErr, setAppsErr] = useState<string>("");
-  const [applications, setApplications] = useState<any[]>([]);
-
   // Profile hydration (wallet + tier + fairscore) — USER ONLY
   const [profile, setProfile] = useState<HydratedProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
@@ -379,11 +392,43 @@ export default function BountiesTab({
   const [adminCreateErr, setAdminCreateErr] = useState<string>("");
   const [adminCreateOk, setAdminCreateOk] = useState<string>("");
 
+  // Admin applications — ADMIN ONLY
+  const [adminAppsOpen, setAdminAppsOpen] = useState(false);
+  const [adminAppsLoading, setAdminAppsLoading] = useState(false);
+  const [adminAppsErr, setAdminAppsErr] = useState("");
+  const [adminApps, setAdminApps] = useState<any[]>([]);
+  const [adminAppsCount, setAdminAppsCount] = useState<number>(0);
+
+  // Admin actions
+  const [adminExporting, setAdminExporting] = useState(false);
+  const [adminDeleting, setAdminDeleting] = useState(false);
+  const [adminDeleteErr, setAdminDeleteErr] = useState("");
+  const [adminDeleteOk, setAdminDeleteOk] = useState("");
+
   const sorted = useMemo(() => {
     return (list || [])
       .slice()
       .sort((a: any, b: any) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
   }, [list]);
+
+  const selectedAny = selected as any;
+
+  const selectedQuestions: AppQuestion[] = useMemo(() => {
+    const q1 = normalizeQuestionsAny(selectedAny?.questions);
+    if (q1.length) return q1;
+    const q2 =
+      normalizeQuestionsAny(selectedAny?.application_schema) ||
+      normalizeQuestionsAny(selectedAny?.applicationSchema) ||
+      normalizeQuestionsAny(selectedAny?.application_schema_json) ||
+      [];
+    return q2;
+  }, [selectedAny?.questions, selectedAny?.application_schema, selectedAny?.applicationSchema, selectedAny?.application_schema_json]);
+
+  const questionLabelById = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const q of selectedQuestions) m[q.id] = q.label;
+    return m;
+  }, [selectedQuestions]);
 
   async function getBestInitData(): Promise<string> {
     await ensureTelegramScript();
@@ -492,8 +537,16 @@ export default function BountiesTab({
     setAdminCreateLoading(false);
   }
 
+  function closeAdminApps() {
+    setAdminAppsOpen(false);
+    setAdminAppsErr("");
+    setAdminAppsLoading(false);
+    setAdminApps([]);
+    setAdminAppsCount(0);
+  }
+
   function canApply(b: any): { ok: boolean; reason?: string } {
-    // FIX 2: Never allow apply in Admin mode
+    // Never allow apply in Admin mode
     if (isAdmin) return { ok: false, reason: "Admin mode" };
 
     const status = String(b?.status || "open").toLowerCase();
@@ -545,9 +598,7 @@ export default function BountiesTab({
 
       const session = j.data as BountyApplySession;
 
-      // IMPORTANT FIX:
-      // If backend session response forgot to include bounty.questions (common mismatch),
-      // fall back to whatever we already have on the bounty object (questions/application_schema/etc).
+      // If backend session response forgot bounty.questions, fall back to bounty object
       const sessionQs = Array.isArray(session?.bounty?.questions) ? session.bounty.questions : [];
       const fallbackQs =
         sessionQs.length > 0
@@ -671,7 +722,7 @@ export default function BountiesTab({
 
     try {
       const id = await getBestInitData();
-      if (!id) throw new Error("Telegram initData missing. Reopen the mini app.");
+      if (!id) throw new Error("Telegram initData missing. Reopen Admin Panel from bot.");
 
       const res = await fetch("/api/tg/admin/bounties", {
         method: "POST",
@@ -707,84 +758,123 @@ export default function BountiesTab({
     }
   }
 
-  // === ADMIN: VIEW APPLICATIONS ===
-  async function loadApplications(bountyId: string) {
-    if (!adminSid) return;
+  // ✅ IMPORTANT: Admin routes must use bounty.id (NOT bounty.code).
+  async function adminLoadApplications(bountyId: string) {
+    if (!isAdmin) return;
+    if (!adminSid) {
+      setAdminAppsErr("Admin session missing. Open Admin Panel from the bot again.");
+      return;
+    }
 
-    setAppsLoading(true);
-    setAppsErr("");
+    setAdminAppsErr("");
+    setAdminAppsLoading(true);
+    setAdminApps([]);
+    setAdminAppsCount(0);
 
     try {
       const id = await getBestInitData();
+      if (!id) throw new Error("Telegram initData missing. Reopen Admin Panel from bot.");
 
       const res = await fetch(`/api/tg/admin/bounties/${encodeURIComponent(bountyId)}/applications`, {
+        method: "GET",
         headers: {
           ...tgInitHeaders(id),
           "x-admin-sid": adminSid,
           "x-app-sid": adminSid,
         },
-        cache: "no-store",
       });
 
-      const j = await res.json().catch(() => null);
+      const j = (await res.json().catch(() => null)) as any;
+      if (!res.ok || !j?.ok) throw new Error(j?.error || `Failed to load (${res.status})`);
 
-      if (!res.ok || !j?.ok) {
-        throw new Error(j?.error || "Failed to load applications");
-      }
+      setAdminApps(Array.isArray(j.applications) ? j.applications : []);
+      setAdminAppsCount(typeof j.count === "number" ? j.count : Array.isArray(j.applications) ? j.applications.length : 0);
+      setAdminAppsOpen(true);
 
-      setApplications(Array.isArray(j.data) ? j.data : []);
-      setAppsOpen(true);
+      try {
+        getTg()?.HapticFeedback?.notificationOccurred?.("success");
+      } catch {}
     } catch (e: any) {
-      setAppsErr(e?.message || "Failed to load applications");
+      setAdminAppsErr(e?.message || "Failed to load applications.");
+      try {
+        getTg()?.HapticFeedback?.notificationOccurred?.("error");
+      } catch {}
     } finally {
-      setAppsLoading(false);
+      setAdminAppsLoading(false);
     }
   }
 
-  // === ADMIN: EXPORT CSV ===
-  async function exportCSV(bountyId: string) {
-    if (!adminSid) return;
+  async function adminExportCsv(bountyId: string) {
+    if (!isAdmin) return;
+    if (!adminSid) {
+      setAdminAppsErr("Admin session missing. Open Admin Panel from the bot again.");
+      return;
+    }
+
+    setAdminExporting(true);
+    setAdminAppsErr("");
 
     try {
       const id = await getBestInitData();
+      if (!id) throw new Error("Telegram initData missing. Reopen Admin Panel from bot.");
 
-      const res = await fetch(`/api/tg/admin/bounties/${encodeURIComponent(bountyId)}/csv`, {
+      const res = await fetch(`/api/tg/admin/bounties/${encodeURIComponent(bountyId)}/applications.csv`, {
+        method: "GET",
         headers: {
           ...tgInitHeaders(id),
           "x-admin-sid": adminSid,
           "x-app-sid": adminSid,
         },
-        cache: "no-store",
       });
 
       if (!res.ok) {
-        const j = await res.json().catch(() => null);
-        throw new Error(j?.error || `CSV export failed (${res.status})`);
+        const j = (await res.json().catch(() => null)) as any;
+        throw new Error(j?.error || `Export failed (${res.status})`);
       }
 
       const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
+      const url = URL.createObjectURL(blob);
 
       const a = document.createElement("a");
       a.href = url;
       a.download = `bounty_${bountyId}_applications.csv`;
+      document.body.appendChild(a);
       a.click();
+      a.remove();
 
-      window.URL.revokeObjectURL(url);
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+
+      try {
+        getTg()?.HapticFeedback?.notificationOccurred?.("success");
+      } catch {}
     } catch (e: any) {
-      alert(e?.message || "CSV export failed");
+      setAdminAppsErr(e?.message || "CSV export failed.");
+      try {
+        getTg()?.HapticFeedback?.notificationOccurred?.("error");
+      } catch {}
+    } finally {
+      setAdminExporting(false);
     }
   }
 
-  // === ADMIN: DELETE BOUNTY ===
-  async function deleteBounty(bountyId: string) {
-    if (!adminSid) return;
+  async function adminDeleteBounty(bountyId: string) {
+    if (!isAdmin) return;
+    if (!adminSid) {
+      setAdminDeleteErr("Admin session missing. Open Admin Panel from the bot again.");
+      return;
+    }
 
-    const ok = confirm("Delete this bounty? This cannot be undone.");
+    setAdminDeleteErr("");
+    setAdminDeleteOk("");
+
+    const ok = typeof window !== "undefined" ? window.confirm("Delete this bounty and ALL applications? This cannot be undone.") : false;
     if (!ok) return;
+
+    setAdminDeleting(true);
 
     try {
       const id = await getBestInitData();
+      if (!id) throw new Error("Telegram initData missing. Reopen Admin Panel from bot.");
 
       const res = await fetch(`/api/tg/admin/bounties/${encodeURIComponent(bountyId)}`, {
         method: "DELETE",
@@ -795,29 +885,33 @@ export default function BountiesTab({
         },
       });
 
-      const j = await res.json().catch(() => null);
+      const j = (await res.json().catch(() => null)) as any;
+      if (!res.ok || !j?.ok) throw new Error(j?.error || `Delete failed (${res.status})`);
 
-      if (!res.ok || !j?.ok) throw new Error(j?.error || "Delete failed");
-
-      refresh();
-      closeDetails();
+      setAdminDeleteOk(j?.message || "✅ Deleted");
       try {
         getTg()?.HapticFeedback?.notificationOccurred?.("success");
       } catch {}
+
+      // Close sheets + refresh list
+      closeAdminApps();
+      closeDetails();
+      refresh();
     } catch (e: any) {
-      alert(e?.message || "Delete failed");
+      setAdminDeleteErr(e?.message || "Delete failed.");
       try {
         getTg()?.HapticFeedback?.notificationOccurred?.("error");
       } catch {}
+    } finally {
+      setAdminDeleting(false);
     }
   }
 
-  const selectedAny = selected as any;
   const sPill = statusPill(selected?.status);
   const rewardText = selected ? fmtReward(selected) : null;
 
   // iOS “shake/zoom” fix: ensure 16px font-size on inputs to prevent Safari auto-zoom
-  const input16 = "text-[16px] [font-size:16px]"; // double to be safe in some webviews
+  const input16 = "text-[16px] [font-size:16px]";
 
   return (
     <>
@@ -828,7 +922,7 @@ export default function BountiesTab({
             <div className="text-base font-semibold">🎯 Bounties</div>
             <div className="mt-1 text-sm text-zinc-400">
               {isAdmin
-                ? "Admin mode: create bounties here. Users apply from the user mini app."
+                ? "Admin mode: create/manage bounties here. Users apply from the user mini app."
                 : "Limited-time bounties with winners, badges, and referrals. Apply is verified-wallet + tier-gated."}
             </div>
 
@@ -852,8 +946,7 @@ export default function BountiesTab({
                           {typeof profile.fairscore === "number" ? (
                             <>
                               {" "}
-                              · FairScore:{" "}
-                              <span className="font-mono text-zinc-200">{profile.fairscore.toFixed(1)}</span>
+                              · FairScore: <span className="font-mono text-zinc-200">{profile.fairscore.toFixed(1)}</span>
                             </>
                           ) : (
                             <>
@@ -1033,7 +1126,6 @@ export default function BountiesTab({
                       View details
                     </button>
 
-                    {/* FIX 3: Apply button only in user mode; admin shows “Manage” */}
                     {!isAdmin ? (
                       <button
                         type="button"
@@ -1107,10 +1199,7 @@ export default function BountiesTab({
                 </div>
               ) : null}
 
-              <div
-                className="mt-3 max-h-[72vh] overflow-y-auto overscroll-contain pb-4"
-                style={{ WebkitOverflowScrolling: "touch" as any }}
-              >
+              <div className="mt-3 max-h-[72vh] overflow-y-auto overscroll-contain pb-4" style={{ WebkitOverflowScrolling: "touch" as any }}>
                 <div className="space-y-3">
                   <label className="block">
                     <div className="mb-1 text-xs text-zinc-400">Title *</div>
@@ -1318,9 +1407,7 @@ export default function BountiesTab({
                                 onChange={(e) =>
                                   setAdminDraft((p) => ({
                                     ...p,
-                                    questions: p.questions.map((x) =>
-                                      x.id === q.id ? { ...x, type: e.target.value as any } : x
-                                    ),
+                                    questions: p.questions.map((x) => (x.id === q.id ? { ...x, type: e.target.value as any } : x)),
                                   }))
                                 }
                                 className={cn(
@@ -1342,9 +1429,7 @@ export default function BountiesTab({
                                 onClick={() =>
                                   setAdminDraft((p) => ({
                                     ...p,
-                                    questions: p.questions.map((x) =>
-                                      x.id === q.id ? { ...x, required: !x.required } : x
-                                    ),
+                                    questions: p.questions.map((x) => (x.id === q.id ? { ...x, required: !x.required } : x)),
                                   }))
                                 }
                                 className={cn(
@@ -1386,9 +1471,7 @@ export default function BountiesTab({
                                 onChange={(e) =>
                                   setAdminDraft((p) => ({
                                     ...p,
-                                    questions: p.questions.map((x) =>
-                                      x.id === q.id ? { ...x, optionsCsv: e.target.value } : x
-                                    ),
+                                    questions: p.questions.map((x) => (x.id === q.id ? { ...x, optionsCsv: e.target.value } : x)),
                                   }))
                                 }
                                 placeholder="Option A, Option B"
@@ -1408,9 +1491,7 @@ export default function BountiesTab({
                                   onChange={(e) =>
                                     setAdminDraft((p) => ({
                                       ...p,
-                                      questions: p.questions.map((x) =>
-                                        x.id === q.id ? { ...x, placeholder: e.target.value } : x
-                                      ),
+                                      questions: p.questions.map((x) => (x.id === q.id ? { ...x, placeholder: e.target.value } : x)),
                                     }))
                                   }
                                   placeholder="Type your answer…"
@@ -1429,9 +1510,7 @@ export default function BountiesTab({
                                   onChange={(e) =>
                                     setAdminDraft((p) => ({
                                       ...p,
-                                      questions: p.questions.map((x) =>
-                                        x.id === q.id ? { ...x, maxLen: e.target.value } : x
-                                      ),
+                                      questions: p.questions.map((x) => (x.id === q.id ? { ...x, maxLen: e.target.value } : x)),
                                     }))
                                   }
                                   inputMode="numeric"
@@ -1515,10 +1594,7 @@ export default function BountiesTab({
                 </button>
               </div>
 
-              <div
-                className="mt-3 max-h-[70vh] overflow-y-auto overscroll-contain pb-4"
-                style={{ WebkitOverflowScrolling: "touch" as any }}
-              >
+              <div className="mt-3 max-h-[70vh] overflow-y-auto overscroll-contain pb-4" style={{ WebkitOverflowScrolling: "touch" as any }}>
                 {selected.description ? (
                   <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
                     <div className="text-[11px] text-zinc-500">About</div>
@@ -1575,6 +1651,7 @@ export default function BountiesTab({
                   </div>
                 </div>
 
+                {/* Buttons */}
                 {!isAdmin ? (
                   <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                     <button
@@ -1604,62 +1681,80 @@ export default function BountiesTab({
                     </button>
                   </div>
                 ) : (
-                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    <button
-                      type="button"
-                      onClick={() => loadApplications(String(selectedAny?.id || ""))}
-                      disabled={!adminSid || appsLoading}
-                      className={cn(
-                        "h-12 rounded-2xl border border-white/10 text-sm font-semibold",
-                        !adminSid || appsLoading
-                          ? "bg-white/5 text-zinc-400"
-                          : "bg-white/5 text-zinc-200 hover:bg-white/10"
-                      )}
-                    >
-                      {appsLoading ? "Loading…" : "View applications"}
-                    </button>
+                  <div className="mt-3 space-y-2">
+                    {adminDeleteErr ? (
+                      <div className="rounded-xl border border-red-500/25 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                        {adminDeleteErr}
+                      </div>
+                    ) : null}
+                    {adminDeleteOk ? (
+                      <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
+                        {adminDeleteOk}
+                      </div>
+                    ) : null}
+                    {adminAppsErr ? (
+                      <div className="rounded-xl border border-yellow-500/25 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-200">
+                        {adminAppsErr}
+                      </div>
+                    ) : null}
 
-                    <button
-                      type="button"
-                      onClick={() => exportCSV(String(selectedAny?.id || ""))}
-                      disabled={!adminSid}
-                      className={cn(
-                        "h-12 rounded-2xl border border-white/10 text-sm font-semibold",
-                        !adminSid ? "bg-white/5 text-zinc-400" : "bg-white/5 text-zinc-200 hover:bg-white/10"
-                      )}
-                    >
-                      Export CSV
-                    </button>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        disabled={!adminSid || adminAppsLoading}
+                        onClick={() => adminLoadApplications(String(selectedAny?.id || ""))}
+                        className={cn(
+                          "h-12 rounded-2xl border text-sm font-semibold active:scale-[0.99]",
+                          !adminSid || adminAppsLoading
+                            ? "border-white/10 bg-white/5 text-zinc-400"
+                            : "border-white/10 bg-white/5 text-zinc-200 hover:bg-white/10"
+                        )}
+                      >
+                        {adminAppsLoading ? "Loading…" : `View applications`}
+                      </button>
 
-                    <button
-                      type="button"
-                      onClick={() => deleteBounty(String(selectedAny?.id || ""))}
-                      disabled={!adminSid}
-                      className={cn(
-                        "h-12 rounded-2xl border text-sm font-semibold",
-                        !adminSid
-                          ? "border-red-500/25 bg-red-500/10 text-red-300/70"
-                          : "border-red-500/35 bg-red-500/15 text-red-200 hover:bg-red-500/20"
-                      )}
-                    >
-                      Delete bounty
-                    </button>
+                      <button
+                        type="button"
+                        disabled={!adminSid || adminExporting}
+                        onClick={() => adminExportCsv(String(selectedAny?.id || ""))}
+                        className={cn(
+                          "h-12 rounded-2xl border text-sm font-semibold active:scale-[0.99]",
+                          !adminSid || adminExporting
+                            ? "border-white/10 bg-white/5 text-zinc-400"
+                            : "border-white/10 bg-white/5 text-zinc-200 hover:bg-white/10"
+                        )}
+                      >
+                        {adminExporting ? "Exporting…" : "Export CSV"}
+                      </button>
 
-                    <button
-                      type="button"
-                      onClick={closeDetails}
-                      className="h-12 rounded-2xl border border-white/10 bg-white/5 text-sm font-semibold text-zinc-200 hover:bg-white/10 active:scale-[0.99]"
-                    >
-                      Back
-                    </button>
+                      <button
+                        type="button"
+                        disabled={!adminSid || adminDeleting}
+                        onClick={() => adminDeleteBounty(String(selectedAny?.id || ""))}
+                        className={cn(
+                          "h-12 rounded-2xl text-sm font-semibold active:scale-[0.99]",
+                          !adminSid || adminDeleting
+                            ? "border border-white/10 bg-white/5 text-zinc-400"
+                            : "bg-red-950/60 text-red-100 hover:bg-red-900/60 border border-red-500/20"
+                        )}
+                      >
+                        {adminDeleting ? "Deleting…" : "Delete bounty"}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={closeDetails}
+                        className="h-12 rounded-2xl border border-white/10 bg-white/5 text-sm font-semibold text-zinc-200 hover:bg-white/10 active:scale-[0.99]"
+                      >
+                        Back
+                      </button>
+                    </div>
+
+                    <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-zinc-300">
+                      Admin: Manage bounties here. Users apply in the user mini app.
+                    </div>
                   </div>
                 )}
-
-                {isAdmin ? (
-                  <div className="mt-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-zinc-300">
-                    Admin: Manage bounties here. Users apply in the user mini app.
-                  </div>
-                ) : null}
               </div>
             </div>
           </div>
@@ -1667,79 +1762,117 @@ export default function BountiesTab({
       ) : null}
       {/* === END: BOUNTY_DETAILS_SHEET === */}
 
-      {/* === START: APPLICATIONS_SHEET (ADMIN ONLY) === */}
-      {appsOpen && isAdmin ? (
-        <div className="fixed inset-0 z-[95]">
+      {/* === START: ADMIN_APPS_SHEET === */}
+      {adminAppsOpen && isAdmin ? (
+        <div className="fixed inset-0 z-[92]">
           <button
             type="button"
             aria-label="Close applications"
-            onClick={() => setAppsOpen(false)}
-            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+            onClick={closeAdminApps}
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
           />
 
           <div className="absolute bottom-0 left-0 right-0 mx-auto w-full max-w-3xl">
             <div className="rounded-t-3xl border border-white/10 bg-[#070A0D]/95 p-4 shadow-2xl">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="text-base font-semibold">📥 Applications ({applications.length})</div>
+                  <div className="text-base font-semibold">📥 Applications ({adminAppsCount})</div>
                   <div className="mt-1 text-xs text-zinc-500">
-                    Showing raw answers JSON for now (we’ll make a nice viewer next).
+                    Showing applicants + answers (scrollable).
                   </div>
                 </div>
 
                 <button
                   type="button"
-                  onClick={() => setAppsOpen(false)}
+                  onClick={closeAdminApps}
                   className="h-10 rounded-2xl border border-white/10 bg-white/5 px-4 text-xs font-semibold text-zinc-200 hover:bg-white/10"
                 >
                   Close
                 </button>
               </div>
 
-              {appsErr ? (
-                <div className="mt-3 rounded-xl border border-red-500/25 bg-red-500/10 px-3 py-2 text-sm text-red-200">
-                  {appsErr}
+              {adminAppsErr ? (
+                <div className="mt-3 rounded-xl border border-yellow-500/25 bg-yellow-500/10 px-3 py-2 text-sm text-yellow-200">
+                  {adminAppsErr}
                 </div>
               ) : null}
 
-              <div
-                className="mt-3 max-h-[72vh] overflow-y-auto overscroll-contain pb-4"
-                style={{ WebkitOverflowScrolling: "touch" as any }}
-              >
-                {applications.length === 0 ? (
+              <div className="mt-3 max-h-[70vh] overflow-y-auto overscroll-contain pb-4" style={{ WebkitOverflowScrolling: "touch" as any }}>
+                {adminApps.length === 0 ? (
                   <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-zinc-300">
                     No applications yet.
+                    <div className="mt-1 text-xs text-zinc-500">
+                      If you *did* submit, this usually means the UI called the endpoint with the bounty <span className="font-mono">code</span> instead of <span className="font-mono">id</span>. This tab now calls using <span className="font-mono">bounty.id</span>.
+                    </div>
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {applications.map((a: any, i: number) => (
-                      <div key={`${a?.id || "app"}_${i}`} className="rounded-2xl border border-white/10 bg-black/25 p-3">
-                        <div className="text-xs text-zinc-500">Wallet</div>
-                        <div className="mt-1 font-mono text-sm text-zinc-200 break-all">{String(a?.wallet || "—")}</div>
+                    {adminApps.map((a: any) => {
+                      const ans = asObj(a?.answers);
+                      const keys = Object.keys(ans);
+                      const created = a?.created_at ? fmtDt(a.created_at) : null;
 
-                        <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
-                          <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2">
-                            <div className="text-zinc-500">Tier</div>
-                            <div className="mt-0.5 font-semibold text-zinc-200">{String(a?.tier || "—")}</div>
-                          </div>
-                          <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2">
-                            <div className="text-zinc-500">FairScore</div>
-                            <div className="mt-0.5 font-mono text-zinc-200">
-                              {typeof a?.fairscore === "number"
-                                ? a.fairscore.toFixed(1)
-                                : a?.fairscore
-                                ? String(a.fairscore)
-                                : "—"}
+                      return (
+                        <div key={String(a?.id || Math.random())} className="rounded-2xl border border-white/10 bg-black/25 p-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="text-sm font-semibold text-zinc-100">
+                                {a?.wallet ? shortAddr(String(a.wallet)) : "Applicant"}
+                              </div>
+                              <div className="mt-1 text-xs text-zinc-500">
+                                Tier: <span className="text-zinc-200">{String(a?.tier || "—")}</span>
+                                {" · "}
+                                FairScore:{" "}
+                                <span className="text-zinc-200">
+                                  {typeof a?.fairscore === "number" ? a.fairscore.toFixed(1) : String(a?.fairscore ?? "—")}
+                                </span>
+                                {created ? (
+                                  <>
+                                    {" · "}
+                                    <span className="text-zinc-400">{created}</span>
+                                  </>
+                                ) : null}
+                              </div>
                             </div>
+
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const ok = await tryCopy(String(a?.wallet || ""));
+                                try {
+                                  getTg()?.HapticFeedback?.notificationOccurred?.(ok ? "success" : "error");
+                                } catch {}
+                              }}
+                              className="h-9 shrink-0 rounded-xl border border-white/10 bg-white/5 px-3 text-xs font-semibold text-zinc-200 hover:bg-white/10"
+                            >
+                              Copy
+                            </button>
+                          </div>
+
+                          <div className="mt-3 rounded-2xl border border-white/10 bg-white/5 p-3">
+                            <div className="text-[11px] text-zinc-500">Answers</div>
+
+                            {keys.length === 0 ? (
+                              <div className="mt-2 text-sm text-zinc-300">No answers stored.</div>
+                            ) : (
+                              <div className="mt-2 space-y-2">
+                                {keys.map((k) => {
+                                  const label = questionLabelById[k] || k;
+                                  const v = prettyVal(ans[k]);
+
+                                  return (
+                                    <div key={k} className="rounded-xl border border-white/10 bg-black/20 p-3">
+                                      <div className="text-xs font-semibold text-zinc-200">{label}</div>
+                                      <div className="mt-1 whitespace-pre-wrap text-sm text-zinc-300">{v || "—"}</div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
                           </div>
                         </div>
-
-                        <div className="mt-3 text-xs text-zinc-500">Answers</div>
-                        <pre className="mt-1 whitespace-pre-wrap break-words rounded-xl border border-white/10 bg-black/35 p-3 text-xs text-zinc-200">
-                          {JSON.stringify(a?.answers ?? {}, null, 2)}
-                        </pre>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -1747,7 +1880,7 @@ export default function BountiesTab({
           </div>
         </div>
       ) : null}
-      {/* === END: APPLICATIONS_SHEET === */}
+      {/* === END: ADMIN_APPS_SHEET === */}
 
       {/* === START: APPLY_SHEET (USER ONLY) === */}
       {applyOpen && applySession && !isAdmin ? (
@@ -1800,10 +1933,7 @@ export default function BountiesTab({
                 </div>
               ) : null}
 
-              <div
-                className="mt-3 max-h-[70vh] overflow-y-auto overscroll-contain pb-4"
-                style={{ WebkitOverflowScrolling: "touch" as any }}
-              >
+              <div className="mt-3 max-h-[70vh] overflow-y-auto overscroll-contain pb-4" style={{ WebkitOverflowScrolling: "touch" as any }}>
                 {applySession.bounty.instructions ? (
                   <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
                     <div className="text-[11px] text-zinc-500">Instructions</div>
@@ -1922,4 +2052,4 @@ export default function BountiesTab({
     </>
   );
 }
-// === END: FILE_src/app/(tg)/admin/_tabs/bounties/tab.tsx ===
+// === END: FILE_src/app/tg/_components/BountiesTab.tsx ===
