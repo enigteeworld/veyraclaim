@@ -1415,12 +1415,14 @@ export default function BountiesTab({
                   </div>
                 ) : null}
 
-                {selectedAny?.instructions ? (
-                  <div className="mt-2 rounded-2xl border border-white/10 bg-black/25 p-3">
-                    <div className="text-[11px] text-zinc-500">Instructions</div>
-                    <div className="mt-1 whitespace-pre-wrap text-sm text-zinc-300">{String(selectedAny.instructions)}</div>
-                  </div>
-                ) : null}
+                {(selectedAny?.instructions || selectedAny?.how_to) ? (
+  <div className="mt-2 rounded-2xl border border-white/10 bg-black/25 p-3">
+    <div className="text-[11px] text-zinc-500">Instructions</div>
+    <div className="mt-1 whitespace-pre-wrap text-sm text-zinc-300">
+      {String(selectedAny?.instructions || selectedAny?.how_to)}
+    </div>
+  </div>
+) : null}
 
                 <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
