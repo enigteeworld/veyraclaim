@@ -45,7 +45,8 @@ async function requireAdmin(telegram_user_id: number, project_id: string) {
   if (!data) throw new Error("not an admin for this project");
 }
 
-export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }> }) {
+export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }>
+ }) {
   try {
     const { telegram_user_id } = await authFromAdminSession(req);
     const { id } = await ctx.params;

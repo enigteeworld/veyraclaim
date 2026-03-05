@@ -23,41 +23,80 @@ async function assertAdminSession(adminSid: string) {
 
   if (data.expires_at) {
     const exp = new Date(data.expires_at).getTime();
-    if (!Number.isNaN(exp) && Date.now() > exp) throw new Error("Admin session expired. Reopen Admin Panel from bot.");
+    if (!Number.isNaN(exp) && Date.now() > exp) {
+      throw new Error("Admin session expired. Reopen Admin Panel from bot.");
+    }
   }
 }
 
-export async function DELETE(req: Request, ctx: { params: { bounty_id: string } }) {
+/**
+ * NOTE (Next 16 route typing):
+ * ctx.params is typed as a Promise in your project.
+ */
+export async function DELETE(
+  req: Request,
+  ctx: { params: Promise<{ bounty_id: string }> }
+) {
   try {
     const sid = getSid(req);
     await assertAdminSession(sid);
 
-    const bounty_id = String(ctx?.params?.bounty_id || "").trim();
-    if (!bounty_id) return NextResponse.json({ ok: false, error: "missing bounty_id" }, { status: 400 });
+    const { bounty_id } = await ctx.params;
+    const bountyId = String(bounty_id || "").trim();
+    if (!bountyId) {
+      return NextResponse.json({ ok: false, error: "missing bounty_id" }, { status: 400 });
+    }
 
     // Ensure exists
-    const { data: bounty, error: bErr } = await supabaseAdmin.from("bounties").select("id, code, title").eq("id", bounty_id).maybeSingle();
+    const { data: bounty, error: bErr } = await supabaseAdmin
+      .from("bounties")
+      .select("id, code, title")
+      .eq("id", bountyId)
+      .maybeSingle();
+
     if (bErr) throw new Error(bErr.message);
-    if (!bounty?.id) return NextResponse.json({ ok: false, error: "bounty not found" }, { status: 404 });
+    if (!bounty?.id) {
+      return NextResponse.json({ ok: false, error: "bounty not found" }, { status: 404 });
+    }
 
     // Delete children first (safe even if empty)
-    const { error: aErr } = await supabaseAdmin.from("bounty_applications").delete().eq("bounty_id", bounty_id);
+    const { error: aErr } = await supabaseAdmin
+      .from("bounty_applications")
+      .delete()
+      .eq("bounty_id", bountyId);
+
     if (aErr) throw new Error(aErr.message);
 
-    const { error: sErr } = await supabaseAdmin.from("form_sessions").delete().eq("bounty_id", bounty_id).eq("kind", "bounty");
+    const { error: sErr } = await supabaseAdmin
+      .from("form_sessions")
+      .delete()
+      .eq("bounty_id", bountyId)
+      .eq("kind", "bounty");
+
     if (sErr) throw new Error(sErr.message);
 
     // Delete bounty
-    const { error: dErr } = await supabaseAdmin.from("bounties").delete().eq("id", bounty_id);
+    const { error: dErr } = await supabaseAdmin
+      .from("bounties")
+      .delete()
+      .eq("id", bountyId);
+
     if (dErr) throw new Error(dErr.message);
 
     return NextResponse.json({
       ok: true,
       message: "✅ Bounty deleted",
-      deleted: { id: bounty.id, code: (bounty as any).code ?? null, title: (bounty as any).title ?? null },
+      deleted: {
+        id: bounty.id,
+        code: (bounty as any).code ?? null,
+        title: (bounty as any).title ?? null,
+      },
     });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || "Delete failed" }, { status: 400 });
+    return NextResponse.json(
+      { ok: false, error: e?.message || "Delete failed" },
+      { status: 400 }
+    );
   }
 }
 // === END: FILE_src/app/api/tg/admin/bounties/[bounty_id]/route.ts ===
