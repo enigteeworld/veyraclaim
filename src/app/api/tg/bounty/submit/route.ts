@@ -93,91 +93,35 @@ function withinWindow(starts_at?: string | null, ends_at?: string | null) {
 }
 
 type AppQuestion =
-  | { id: string; type: "text"; label: string; required?: boolean; placeholder?: string; maxLen?: number }
-  | { id: string; type: "textarea"; label: string; required?: boolean; placeholder?: string; maxLen?: number }
-  | { id: string; type: "select"; label: string; required?: boolean; options: string[] };
+  | {
+      id: string;
+      type: "text";
+      label: string;
+      required?: boolean;
+      placeholder?: string;
+      maxLen?: number;
+    }
+  | {
+      id: string;
+      type: "textarea";
+      label: string;
+      required?: boolean;
+      placeholder?: string;
+      maxLen?: number;
+    }
+  | {
+      id: string;
+      type: "select";
+      label: string;
+      required?: boolean;
+      options: string[];
+    };
 
-/** Old helper kept for compatibility */
 function extractQuestions(application_schema: any): AppQuestion[] {
   if (Array.isArray(application_schema)) return application_schema as AppQuestion[];
-  if (application_schema && Array.isArray(application_schema.questions)) return application_schema.questions as AppQuestion[];
+  if (application_schema && Array.isArray(application_schema.questions))
+    return application_schema.questions as AppQuestion[];
   return [];
-}
-
-/**
- * IMPORTANT FIX:
- * Some bounties store schema in fields other than `application_schema`.
- * This reads questions from any likely shape/field, including JSON strings.
- */
-function normalizeQuestionsAny(value: any): AppQuestion[] {
-  try {
-    const raw = typeof value === "string" ? JSON.parse(value) : value;
-
-    const arr = Array.isArray(raw)
-      ? raw
-      : Array.isArray(raw?.questions)
-        ? raw.questions
-        : [];
-
-    const out: AppQuestion[] = [];
-
-    for (const q of arr) {
-      const id = String(q?.id || "").trim();
-      const type = String(q?.type || "text").toLowerCase();
-      const label = String(q?.label || "").trim();
-
-      if (!id || !label) continue;
-
-      const required = q?.required === undefined ? true : !!q.required;
-
-      if (type === "select") {
-        const options = Array.isArray(q?.options)
-          ? q.options.map((x: any) => String(x).trim()).filter(Boolean).slice(0, 24)
-          : [];
-        out.push({ id, type: "select", label, required, options });
-      } else if (type === "textarea") {
-        const maxLen = Number.isFinite(Number(q?.maxLen)) ? Math.floor(Number(q.maxLen)) : undefined;
-        const placeholder = q?.placeholder ? String(q.placeholder).slice(0, 140) : undefined;
-        out.push({ id, type: "textarea", label, required, placeholder, maxLen });
-      } else {
-        const maxLen = Number.isFinite(Number(q?.maxLen)) ? Math.floor(Number(q.maxLen)) : undefined;
-        const placeholder = q?.placeholder ? String(q.placeholder).slice(0, 140) : undefined;
-        out.push({ id, type: "text", label, required, placeholder, maxLen });
-      }
-    }
-
-    return out.slice(0, 20);
-  } catch {
-    return [];
-  }
-}
-
-/**
- * If schema is missing, we STILL store answers (sanitized) so admin doesn't see "No answers stored".
- * This prevents losing user input when the bounty schema column differs.
- */
-function sanitizeAnswersFallback(answersIn: Record<string, any>) {
-  const out: Record<string, string> = {};
-  if (!answersIn || typeof answersIn !== "object") return out;
-
-  const keys = Object.keys(answersIn).slice(0, 20);
-  for (const k of keys) {
-    const key = String(k || "").trim().slice(0, 80);
-    if (!key) continue;
-
-    const raw = (answersIn as any)[k];
-    const val =
-      typeof raw === "string"
-        ? raw.trim()
-        : raw === null || raw === undefined
-          ? ""
-          : String(raw).trim();
-
-    // cap each answer to keep payload sane
-    out[key] = val.slice(0, 800);
-  }
-
-  return out;
 }
 
 function validateAnswers(qs: AppQuestion[], answers: Record<string, any>) {
@@ -187,19 +131,24 @@ function validateAnswers(qs: AppQuestion[], answers: Record<string, any>) {
     const id = String(q?.id || "").trim();
     if (!id) throw new Error("invalid question schema (missing id)");
 
-    const required = q.required !== false;
+    const isRequired = q.required !== false;
     const raw = answers?.[id];
 
-    const val = typeof raw === "string" ? raw.trim() : raw === null || raw === undefined ? "" : String(raw).trim();
+    const val =
+      typeof raw === "string"
+        ? raw.trim()
+        : raw === null || raw === undefined
+          ? ""
+          : String(raw).trim();
 
-    if (required && !val) throw new Error(`missing answer: ${q.label || id}`);
+    if (isRequired && !val) throw new Error(`missing answer: ${q.label || id}`);
 
     if (typeof (q as any).maxLen === "number" && val.length > (q as any).maxLen) {
       throw new Error(`too long: ${q.label || id} (max ${(q as any).maxLen})`);
     }
 
     if (q.type === "select" && val) {
-      const opts = Array.isArray(q.options) ? q.options.map(String) : [];
+      const opts = Array.isArray((q as any).options) ? (q as any).options.map(String) : [];
       if (!opts.includes(val)) throw new Error(`invalid option for: ${q.label || id}`);
     }
 
@@ -227,7 +176,8 @@ export async function POST(req: Request) {
     if (!v.ok) return NextResponse.json({ ok: false, error: v.reason }, { status: 401 });
 
     const telegram_user_id = v.user?.id ? Number(v.user.id) : null;
-    if (!telegram_user_id) return NextResponse.json({ ok: false, error: "missing user id" }, { status: 401 });
+    if (!telegram_user_id)
+      return NextResponse.json({ ok: false, error: "missing user id" }, { status: 401 });
 
     // Load session, ensure belongs to this telegram user and is bounty kind
     const { data: session, error: sErr } = await supabaseAdmin
@@ -242,22 +192,24 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: "not a bounty session" }, { status: 400 });
     if (Number((session as any).telegram_user_id) !== telegram_user_id)
       return NextResponse.json({ ok: false, error: "session does not belong to this user" }, { status: 403 });
-    if ((session as any).used_at) return NextResponse.json({ ok: false, error: "session already submitted" }, { status: 409 });
+    if ((session as any).used_at)
+      return NextResponse.json({ ok: false, error: "session already submitted" }, { status: 409 });
 
     const bounty_id = String((session as any).bounty_id || "").trim();
     if (!bounty_id) return NextResponse.json({ ok: false, error: "session missing bounty_id" }, { status: 500 });
 
     // Re-check bounty (server-side gating at submit time too)
-    // ✅ IMPORTANT: pull schema from multiple possible fields
     const { data: bounty, error: bErr } = await supabaseAdmin
       .from("bounties")
-      .select("id, published, status, starts_at, ends_at, min_tier, application_schema, questions, application_schema_json, applicationSchema")
+      // ✅ IMPORTANT: Only select real columns that exist in your DB
+      .select("id, published, status, starts_at, ends_at, min_tier, application_schema")
       .eq("id", bounty_id)
       .maybeSingle();
 
     if (bErr) throw new Error(bErr.message);
     if (!bounty?.id) return NextResponse.json({ ok: false, error: "bounty not found" }, { status: 404 });
-    if ((bounty as any).published === false) return NextResponse.json({ ok: false, error: "bounty not published" }, { status: 403 });
+    if ((bounty as any).published === false)
+      return NextResponse.json({ ok: false, error: "bounty not published" }, { status: 403 });
 
     const bountyStatus = String((bounty as any)?.status || "open").toLowerCase();
     if (bountyStatus !== "open") {
@@ -288,8 +240,10 @@ export async function POST(req: Request) {
           ? Number((tu as any).last_known_fairscore)
           : null;
 
-    if (!wallet) return NextResponse.json({ ok: false, error: "no verified wallet (verify in bot first)" }, { status: 403 });
-    if (!tier) return NextResponse.json({ ok: false, error: "tier not loaded yet (run Check once)" }, { status: 403 });
+    if (!wallet)
+      return NextResponse.json({ ok: false, error: "no verified wallet (verify in bot first)" }, { status: 403 });
+    if (!tier)
+      return NextResponse.json({ ok: false, error: "tier not loaded yet (run Check once)" }, { status: 403 });
     if (!Number.isFinite(fairscore as any))
       return NextResponse.json({ ok: false, error: "score not loaded yet (run Check once)" }, { status: 403 });
 
@@ -301,32 +255,10 @@ export async function POST(req: Request) {
       );
     }
 
-    // ✅ Schema source (robust)
-    const schemaCandidate =
-      (bounty as any)?.application_schema ??
-      (bounty as any)?.questions ??
-      (bounty as any)?.application_schema_json ??
-      (bounty as any)?.applicationSchema ??
-      null;
-
-    let questions =
-      normalizeQuestionsAny(schemaCandidate) ||
-      extractQuestions(schemaCandidate); // legacy fallback
-
-    // ✅ Validate using schema if present, otherwise store sanitized fallback
-    let answers: Record<string, string> = {};
-    if (questions.length > 0) {
-      answers = validateAnswers(questions, answersIn);
-    } else {
-      // IMPORTANT: do not drop user input if schema is missing
-      answers = sanitizeAnswersFallback(answersIn);
-      if (Object.keys(answers).length === 0) {
-        return NextResponse.json(
-          { ok: false, error: "no answers provided" },
-          { status: 400 }
-        );
-      }
-    }
+    // ✅ Validate answers against the ONE real schema field you have: application_schema
+    const schemaCandidate = (bounty as any)?.application_schema ?? null;
+    const questions = extractQuestions(schemaCandidate);
+    const answers = validateAnswers(questions, answersIn);
 
     // Insert application (dedupe if unique constraint exists)
     const insertPayload = {
@@ -335,7 +267,7 @@ export async function POST(req: Request) {
       wallet,
       tier,
       fairscore,
-      answers, // ✅ now will not be {}
+      answers,
       created_at: new Date().toISOString(),
     };
 
@@ -344,7 +276,10 @@ export async function POST(req: Request) {
     if (iErr) {
       const msg = (iErr.message || "").toLowerCase();
       if (msg.includes("duplicate") || msg.includes("unique") || msg.includes("already exists")) {
-        await supabaseAdmin.from("form_sessions").update({ used_at: new Date().toISOString() } as any).eq("sid", sid);
+        await supabaseAdmin
+          .from("form_sessions")
+          .update({ used_at: new Date().toISOString() } as any)
+          .eq("sid", sid);
         return NextResponse.json({ ok: false, error: "already applied to this bounty" }, { status: 409 });
       }
       throw new Error(iErr.message);
@@ -355,7 +290,6 @@ export async function POST(req: Request) {
       .from("form_sessions")
       .update({ used_at: new Date().toISOString() } as any)
       .eq("sid", sid);
-
     if (uErr) throw new Error(uErr.message);
 
     return NextResponse.json({ ok: true, message: "✅ Bounty application submitted" });
