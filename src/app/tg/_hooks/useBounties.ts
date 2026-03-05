@@ -20,6 +20,7 @@ export type Bounty = {
 
   // richer details (for “View details”)
   how_to?: string | null;
+  instructions?: string | null; // ✅ normalized alias for UI
   rules?: string | null;
   link_url?: string | null;
   max_winners?: number | null;
@@ -109,6 +110,45 @@ function pickRows(json: any): Bounty[] {
   return Array.isArray(rows) ? rows : [];
 }
 
+function normalizeBountyRow(row: any): Bounty {
+  const b: any = { ...(row || {}) };
+
+  // ✅ Normalize "instructions" across your schema variants:
+  // DB currently has `how_to` (seen in your table screenshots),
+  // but some routes/UI use `instructions`.
+  //
+  // Rule:
+  // - if instructions missing but how_to exists -> instructions = how_to
+  // - if how_to missing but instructions exists -> how_to = instructions
+  const howTo =
+    typeof b.how_to === "string"
+      ? b.how_to
+      : typeof b.howTo === "string"
+      ? b.howTo
+      : typeof b.instructions === "string"
+      ? b.instructions
+      : null;
+
+  const instr =
+    typeof b.instructions === "string"
+      ? b.instructions
+      : typeof b.how_to === "string"
+      ? b.how_to
+      : typeof b.howTo === "string"
+      ? b.howTo
+      : null;
+
+  b.how_to = howTo;
+  b.instructions = instr;
+
+  // ✅ Normalize application schema too (some endpoints might return `questions`)
+  if (b.application_schema == null && b.questions != null) {
+    b.application_schema = b.questions;
+  }
+
+  return b as Bounty;
+}
+
 async function readJsonSafe(res: Response) {
   const j = await res.json().catch(() => null);
   return j ?? null;
@@ -194,7 +234,9 @@ export function useBounties(args: UseBountiesArgs) {
         throw new Error(json?.error || `Failed to load bounties (${res.status})`);
       }
 
-      return pickRows(json);
+      // ✅ Normalize the rows so the UI always has `instructions`
+      const rows = pickRows(json).map((r: any) => normalizeBountyRow(r));
+      return rows;
     },
     [adminSid, getBestInitData, sid]
   );

@@ -1,3 +1,4 @@
+// === START: FILE_src/app/(tg)/admin/_tabs/bounties/tab.tsx ===
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -351,6 +352,12 @@ export default function BountiesTab({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selected, setSelected] = useState<Bounty | null>(null);
 
+  // === ADMIN APPLICATION VIEW ===
+  const [appsOpen, setAppsOpen] = useState(false);
+  const [appsLoading, setAppsLoading] = useState(false);
+  const [appsErr, setAppsErr] = useState<string>("");
+  const [applications, setApplications] = useState<any[]>([]);
+
   // Profile hydration (wallet + tier + fairscore) — USER ONLY
   const [profile, setProfile] = useState<HydratedProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
@@ -700,13 +707,117 @@ export default function BountiesTab({
     }
   }
 
+  // === ADMIN: VIEW APPLICATIONS ===
+  async function loadApplications(bountyId: string) {
+    if (!adminSid) return;
+
+    setAppsLoading(true);
+    setAppsErr("");
+
+    try {
+      const id = await getBestInitData();
+
+      const res = await fetch(`/api/tg/admin/bounties/${encodeURIComponent(bountyId)}/applications`, {
+        headers: {
+          ...tgInitHeaders(id),
+          "x-admin-sid": adminSid,
+          "x-app-sid": adminSid,
+        },
+        cache: "no-store",
+      });
+
+      const j = await res.json().catch(() => null);
+
+      if (!res.ok || !j?.ok) {
+        throw new Error(j?.error || "Failed to load applications");
+      }
+
+      setApplications(Array.isArray(j.data) ? j.data : []);
+      setAppsOpen(true);
+    } catch (e: any) {
+      setAppsErr(e?.message || "Failed to load applications");
+    } finally {
+      setAppsLoading(false);
+    }
+  }
+
+  // === ADMIN: EXPORT CSV ===
+  async function exportCSV(bountyId: string) {
+    if (!adminSid) return;
+
+    try {
+      const id = await getBestInitData();
+
+      const res = await fetch(`/api/tg/admin/bounties/${encodeURIComponent(bountyId)}/csv`, {
+        headers: {
+          ...tgInitHeaders(id),
+          "x-admin-sid": adminSid,
+          "x-app-sid": adminSid,
+        },
+        cache: "no-store",
+      });
+
+      if (!res.ok) {
+        const j = await res.json().catch(() => null);
+        throw new Error(j?.error || `CSV export failed (${res.status})`);
+      }
+
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `bounty_${bountyId}_applications.csv`;
+      a.click();
+
+      window.URL.revokeObjectURL(url);
+    } catch (e: any) {
+      alert(e?.message || "CSV export failed");
+    }
+  }
+
+  // === ADMIN: DELETE BOUNTY ===
+  async function deleteBounty(bountyId: string) {
+    if (!adminSid) return;
+
+    const ok = confirm("Delete this bounty? This cannot be undone.");
+    if (!ok) return;
+
+    try {
+      const id = await getBestInitData();
+
+      const res = await fetch(`/api/tg/admin/bounties/${encodeURIComponent(bountyId)}`, {
+        method: "DELETE",
+        headers: {
+          ...tgInitHeaders(id),
+          "x-admin-sid": adminSid,
+          "x-app-sid": adminSid,
+        },
+      });
+
+      const j = await res.json().catch(() => null);
+
+      if (!res.ok || !j?.ok) throw new Error(j?.error || "Delete failed");
+
+      refresh();
+      closeDetails();
+      try {
+        getTg()?.HapticFeedback?.notificationOccurred?.("success");
+      } catch {}
+    } catch (e: any) {
+      alert(e?.message || "Delete failed");
+      try {
+        getTg()?.HapticFeedback?.notificationOccurred?.("error");
+      } catch {}
+    }
+  }
+
   const selectedAny = selected as any;
   const sPill = statusPill(selected?.status);
   const rewardText = selected ? fmtReward(selected) : null;
 
   // iOS “shake/zoom” fix: ensure 16px font-size on inputs to prevent Safari auto-zoom
-  const input16 =
-    "text-[16px] [font-size:16px]"; // double to be safe in some webviews
+  const input16 = "text-[16px] [font-size:16px]"; // double to be safe in some webviews
 
   return (
     <>
@@ -1354,7 +1465,7 @@ export default function BountiesTab({
                   </button>
 
                   <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-zinc-300">
-                    Uses <span className="font-mono">/api/tg/admin/bounties/create</span> with headers{" "}
+                    Uses <span className="font-mono">/api/tg/admin/bounties</span> with headers{" "}
                     <span className="font-mono">x-admin-sid</span> / <span className="font-mono">x-app-sid</span>.
                   </div>
                 </div>
@@ -1416,13 +1527,13 @@ export default function BountiesTab({
                 ) : null}
 
                 {(selectedAny?.instructions || selectedAny?.how_to) ? (
-  <div className="mt-2 rounded-2xl border border-white/10 bg-black/25 p-3">
-    <div className="text-[11px] text-zinc-500">Instructions</div>
-    <div className="mt-1 whitespace-pre-wrap text-sm text-zinc-300">
-      {String(selectedAny?.instructions || selectedAny?.how_to)}
-    </div>
-  </div>
-) : null}
+                  <div className="mt-2 rounded-2xl border border-white/10 bg-black/25 p-3">
+                    <div className="text-[11px] text-zinc-500">Instructions</div>
+                    <div className="mt-1 whitespace-pre-wrap text-sm text-zinc-300">
+                      {String(selectedAny?.instructions || selectedAny?.how_to)}
+                    </div>
+                  </div>
+                ) : null}
 
                 <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
@@ -1464,8 +1575,8 @@ export default function BountiesTab({
                   </div>
                 </div>
 
-                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  {!isAdmin ? (
+                {!isAdmin ? (
+                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                     <button
                       type="button"
                       disabled={applyLoading || !canApply(selectedAny).ok}
@@ -1483,45 +1594,70 @@ export default function BountiesTab({
                         ? "Apply"
                         : canApply(selectedAny).reason || "Not eligible"}
                     </button>
-                  ) : (
+
                     <button
                       type="button"
-                      onClick={() => {
-                        closeDetails();
-                        setAdminCreateErr("");
-                        setAdminCreateOk("");
-                        setAdminDraft((p) => ({
-                          ...p,
-                          title: String(selectedAny?.title || ""),
-                          description: String(selectedAny?.description || ""),
-                          instructions: String(selectedAny?.instructions || ""),
-                          minTier: String(selectedAny?.min_tier || "bronze"),
-                          reward: selectedAny?.reward ? String(selectedAny.reward) : "10",
-                          currency: String(selectedAny?.currency || "USDC"),
-                          linkUrl: String(selectedAny?.link_url || ""),
-                          maxWinners: selectedAny?.max_winners ? String(selectedAny.max_winners) : "10",
-                        }));
-                        setAdminCreateOpen(true);
-                      }}
+                      onClick={closeDetails}
                       className="h-12 rounded-2xl border border-white/10 bg-white/5 text-sm font-semibold text-zinc-200 hover:bg-white/10 active:scale-[0.99]"
-                      title="Quick duplicate as a new bounty"
                     >
-                      Duplicate as new
+                      Back
                     </button>
-                  )}
+                  </div>
+                ) : (
+                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={() => loadApplications(String(selectedAny?.id || ""))}
+                      disabled={!adminSid || appsLoading}
+                      className={cn(
+                        "h-12 rounded-2xl border border-white/10 text-sm font-semibold",
+                        !adminSid || appsLoading
+                          ? "bg-white/5 text-zinc-400"
+                          : "bg-white/5 text-zinc-200 hover:bg-white/10"
+                      )}
+                    >
+                      {appsLoading ? "Loading…" : "View applications"}
+                    </button>
 
-                  <button
-                    type="button"
-                    onClick={closeDetails}
-                    className="h-12 rounded-2xl border border-white/10 bg-white/5 text-sm font-semibold text-zinc-200 hover:bg-white/10 active:scale-[0.99]"
-                  >
-                    Back
-                  </button>
-                </div>
+                    <button
+                      type="button"
+                      onClick={() => exportCSV(String(selectedAny?.id || ""))}
+                      disabled={!adminSid}
+                      className={cn(
+                        "h-12 rounded-2xl border border-white/10 text-sm font-semibold",
+                        !adminSid ? "bg-white/5 text-zinc-400" : "bg-white/5 text-zinc-200 hover:bg-white/10"
+                      )}
+                    >
+                      Export CSV
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => deleteBounty(String(selectedAny?.id || ""))}
+                      disabled={!adminSid}
+                      className={cn(
+                        "h-12 rounded-2xl border text-sm font-semibold",
+                        !adminSid
+                          ? "border-red-500/25 bg-red-500/10 text-red-300/70"
+                          : "border-red-500/35 bg-red-500/15 text-red-200 hover:bg-red-500/20"
+                      )}
+                    >
+                      Delete bounty
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={closeDetails}
+                      className="h-12 rounded-2xl border border-white/10 bg-white/5 text-sm font-semibold text-zinc-200 hover:bg-white/10 active:scale-[0.99]"
+                    >
+                      Back
+                    </button>
+                  </div>
+                )}
 
                 {isAdmin ? (
                   <div className="mt-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-zinc-300">
-                    Admin note: Apply is disabled here. Users apply in user mini app.
+                    Admin: Manage bounties here. Users apply in the user mini app.
                   </div>
                 ) : null}
               </div>
@@ -1530,6 +1666,88 @@ export default function BountiesTab({
         </div>
       ) : null}
       {/* === END: BOUNTY_DETAILS_SHEET === */}
+
+      {/* === START: APPLICATIONS_SHEET (ADMIN ONLY) === */}
+      {appsOpen && isAdmin ? (
+        <div className="fixed inset-0 z-[95]">
+          <button
+            type="button"
+            aria-label="Close applications"
+            onClick={() => setAppsOpen(false)}
+            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+          />
+
+          <div className="absolute bottom-0 left-0 right-0 mx-auto w-full max-w-3xl">
+            <div className="rounded-t-3xl border border-white/10 bg-[#070A0D]/95 p-4 shadow-2xl">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-base font-semibold">📥 Applications ({applications.length})</div>
+                  <div className="mt-1 text-xs text-zinc-500">
+                    Showing raw answers JSON for now (we’ll make a nice viewer next).
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setAppsOpen(false)}
+                  className="h-10 rounded-2xl border border-white/10 bg-white/5 px-4 text-xs font-semibold text-zinc-200 hover:bg-white/10"
+                >
+                  Close
+                </button>
+              </div>
+
+              {appsErr ? (
+                <div className="mt-3 rounded-xl border border-red-500/25 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+                  {appsErr}
+                </div>
+              ) : null}
+
+              <div
+                className="mt-3 max-h-[72vh] overflow-y-auto overscroll-contain pb-4"
+                style={{ WebkitOverflowScrolling: "touch" as any }}
+              >
+                {applications.length === 0 ? (
+                  <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-zinc-300">
+                    No applications yet.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {applications.map((a: any, i: number) => (
+                      <div key={`${a?.id || "app"}_${i}`} className="rounded-2xl border border-white/10 bg-black/25 p-3">
+                        <div className="text-xs text-zinc-500">Wallet</div>
+                        <div className="mt-1 font-mono text-sm text-zinc-200 break-all">{String(a?.wallet || "—")}</div>
+
+                        <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                          <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+                            <div className="text-zinc-500">Tier</div>
+                            <div className="mt-0.5 font-semibold text-zinc-200">{String(a?.tier || "—")}</div>
+                          </div>
+                          <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+                            <div className="text-zinc-500">FairScore</div>
+                            <div className="mt-0.5 font-mono text-zinc-200">
+                              {typeof a?.fairscore === "number"
+                                ? a.fairscore.toFixed(1)
+                                : a?.fairscore
+                                ? String(a.fairscore)
+                                : "—"}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="mt-3 text-xs text-zinc-500">Answers</div>
+                        <pre className="mt-1 whitespace-pre-wrap break-words rounded-xl border border-white/10 bg-black/35 p-3 text-xs text-zinc-200">
+                          {JSON.stringify(a?.answers ?? {}, null, 2)}
+                        </pre>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {/* === END: APPLICATIONS_SHEET === */}
 
       {/* === START: APPLY_SHEET (USER ONLY) === */}
       {applyOpen && applySession && !isAdmin ? (
@@ -1545,9 +1763,7 @@ export default function BountiesTab({
             <div className="rounded-t-3xl border border-white/10 bg-[#070A0D]/95 p-4 shadow-2xl">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="break-words text-base font-semibold">
-                    {applySession.bounty.title || "Bounty application"}
-                  </div>
+                  <div className="break-words text-base font-semibold">{applySession.bounty.title || "Bounty application"}</div>
                   <div className="mt-1 break-words text-xs text-zinc-500">
                     Wallet:{" "}
                     <span className="font-mono" title={applySession.profile.wallet}>
@@ -1591,9 +1807,7 @@ export default function BountiesTab({
                 {applySession.bounty.instructions ? (
                   <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
                     <div className="text-[11px] text-zinc-500">Instructions</div>
-                    <div className="mt-1 whitespace-pre-wrap text-sm text-zinc-300">
-                      {applySession.bounty.instructions}
-                    </div>
+                    <div className="mt-1 whitespace-pre-wrap text-sm text-zinc-300">{applySession.bounty.instructions}</div>
                   </div>
                 ) : null}
 
@@ -1708,3 +1922,4 @@ export default function BountiesTab({
     </>
   );
 }
+// === END: FILE_src/app/(tg)/admin/_tabs/bounties/tab.tsx ===
