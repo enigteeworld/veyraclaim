@@ -93,55 +93,62 @@ function withinWindow(starts_at?: string | null, ends_at?: string | null) {
 }
 
 type AppQuestion =
-  | {
-      id: string;
-      type: "text";
-      label: string;
-      required?: boolean;
-      placeholder?: string;
-      maxLen?: number;
-    }
-  | {
-      id: string;
-      type: "textarea";
-      label: string;
-      required?: boolean;
-      placeholder?: string;
-      maxLen?: number;
-    }
-  | {
-      id: string;
-      type: "select";
-      label: string;
-      required?: boolean;
-      options: string[];
-    };
+  | { id: string; type: "text"; label: string; required?: boolean; placeholder?: string; maxLen?: number }
+  | { id: string; type: "textarea"; label: string; required?: boolean; placeholder?: string; maxLen?: number }
+  | { id: string; type: "select"; label: string; required?: boolean; options: string[] };
 
 function extractQuestions(application_schema: any): AppQuestion[] {
   if (Array.isArray(application_schema)) return application_schema as AppQuestion[];
-  if (application_schema && Array.isArray(application_schema.questions))
-    return application_schema.questions as AppQuestion[];
+  if (application_schema && Array.isArray(application_schema.questions)) return application_schema.questions as AppQuestion[];
   return [];
 }
 
-function validateAnswers(qs: AppQuestion[], answers: Record<string, any>) {
+function normKey(s: string) {
+  return String(s || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[:*]+/g, "");
+}
+
+/**
+ * If client sent answers keyed by label instead of id, try to resolve it.
+ */
+function getAnswerForQuestion(q: AppQuestion, answersIn: Record<string, any>) {
+  const id = String((q as any)?.id || "").trim();
+  const label = String((q as any)?.label || "").trim();
+
+  if (id && Object.prototype.hasOwnProperty.call(answersIn, id)) return answersIn[id];
+
+  // label fallback(s)
+  if (label && Object.prototype.hasOwnProperty.call(answersIn, label)) return answersIn[label];
+
+  // case-insensitive label match
+  const want = normKey(label);
+  if (want) {
+    for (const k of Object.keys(answersIn || {})) {
+      if (normKey(k) === want) return answersIn[k];
+    }
+  }
+
+  return undefined;
+}
+
+function validateAnswers(qs: AppQuestion[], answersIn: Record<string, any>) {
   const out: Record<string, string> = {};
 
   for (const q of qs) {
     const id = String(q?.id || "").trim();
     if (!id) throw new Error("invalid question schema (missing id)");
 
-    const isRequired = q.required !== false;
-    const raw = answers?.[id];
+    const required = q.required !== false;
+
+    const raw = getAnswerForQuestion(q, answersIn);
 
     const val =
-      typeof raw === "string"
-        ? raw.trim()
-        : raw === null || raw === undefined
-          ? ""
-          : String(raw).trim();
+      typeof raw === "string" ? raw.trim() : raw === null || raw === undefined ? "" : String(raw).trim();
 
-    if (isRequired && !val) throw new Error(`missing answer: ${q.label || id}`);
+    if (required && !val) throw new Error(`missing answer: ${q.label || id}`);
 
     if (typeof (q as any).maxLen === "number" && val.length > (q as any).maxLen) {
       throw new Error(`too long: ${q.label || id} (max ${(q as any).maxLen})`);
@@ -152,8 +159,34 @@ function validateAnswers(qs: AppQuestion[], answers: Record<string, any>) {
       if (!opts.includes(val)) throw new Error(`invalid option for: ${q.label || id}`);
     }
 
-    // Only store known keys (prevents junk payload spam)
     out[id] = val;
+  }
+
+  return out;
+}
+
+/**
+ * Fallback sanitization when schema is missing/empty:
+ * - keeps user data instead of silently storing {}
+ * - limits keys/values to prevent abuse
+ */
+function sanitizeAnswersLoose(answersIn: Record<string, any>) {
+  const out: Record<string, string> = {};
+  const keys = Object.keys(answersIn || {}).slice(0, 30); // cap fields
+
+  for (const k of keys) {
+    const key = String(k || "").trim().slice(0, 80);
+    if (!key) continue;
+
+    const raw = (answersIn as any)[k];
+    const val =
+      typeof raw === "string" ? raw.trim() : raw === null || raw === undefined ? "" : String(raw).trim();
+
+    // cap value length
+    const safeVal = val.slice(0, 2000);
+    if (!safeVal) continue;
+
+    out[key] = safeVal;
   }
 
   return out;
@@ -176,13 +209,12 @@ export async function POST(req: Request) {
     if (!v.ok) return NextResponse.json({ ok: false, error: v.reason }, { status: 401 });
 
     const telegram_user_id = v.user?.id ? Number(v.user.id) : null;
-    if (!telegram_user_id)
-      return NextResponse.json({ ok: false, error: "missing user id" }, { status: 401 });
+    if (!telegram_user_id) return NextResponse.json({ ok: false, error: "missing user id" }, { status: 401 });
 
     // Load session, ensure belongs to this telegram user and is bounty kind
     const { data: session, error: sErr } = await supabaseAdmin
       .from("form_sessions")
-      .select("sid, kind, bounty_id, telegram_user_id, wallet, tier, fairscore, used_at, created_at")
+      .select("sid, kind, bounty_id, telegram_user_id, used_at")
       .eq("sid", sid)
       .maybeSingle();
 
@@ -201,7 +233,6 @@ export async function POST(req: Request) {
     // Re-check bounty (server-side gating at submit time too)
     const { data: bounty, error: bErr } = await supabaseAdmin
       .from("bounties")
-      // ✅ IMPORTANT: Only select real columns that exist in your DB
       .select("id, published, status, starts_at, ends_at, min_tier, application_schema")
       .eq("id", bounty_id)
       .maybeSingle();
@@ -240,10 +271,8 @@ export async function POST(req: Request) {
           ? Number((tu as any).last_known_fairscore)
           : null;
 
-    if (!wallet)
-      return NextResponse.json({ ok: false, error: "no verified wallet (verify in bot first)" }, { status: 403 });
-    if (!tier)
-      return NextResponse.json({ ok: false, error: "tier not loaded yet (run Check once)" }, { status: 403 });
+    if (!wallet) return NextResponse.json({ ok: false, error: "no verified wallet (verify in bot first)" }, { status: 403 });
+    if (!tier) return NextResponse.json({ ok: false, error: "tier not loaded yet (run Check once)" }, { status: 403 });
     if (!Number.isFinite(fairscore as any))
       return NextResponse.json({ ok: false, error: "score not loaded yet (run Check once)" }, { status: 403 });
 
@@ -255,12 +284,33 @@ export async function POST(req: Request) {
       );
     }
 
-    // ✅ Validate answers against the ONE real schema field you have: application_schema
-    const schemaCandidate = (bounty as any)?.application_schema ?? null;
-    const questions = extractQuestions(schemaCandidate);
-    const answers = validateAnswers(questions, answersIn);
+    // Validate answers against schema when present; otherwise store sanitized answers
+    const questions = extractQuestions((bounty as any)?.application_schema);
 
-    // Insert application (dedupe if unique constraint exists)
+    let answers: Record<string, string> = {};
+    if (questions.length > 0) {
+      answers = validateAnswers(questions, answersIn);
+
+      // If schema exists but we captured nothing, something is mismatched—fail loudly
+      if (Object.keys(answers).length === 0) {
+        return NextResponse.json(
+          { ok: false, error: "No answers captured. Please reopen the bounty form and try again." },
+          { status: 400 }
+        );
+      }
+    } else {
+      // Schema missing/empty—do NOT lose user data
+      answers = sanitizeAnswersLoose(answersIn);
+
+      if (Object.keys(answers).length === 0) {
+        return NextResponse.json(
+          { ok: false, error: "No answers captured (bounty schema missing). Please contact admin." },
+          { status: 400 }
+        );
+      }
+    }
+
+    // Insert application
     const insertPayload = {
       bounty_id,
       telegram_user_id,
@@ -276,10 +326,7 @@ export async function POST(req: Request) {
     if (iErr) {
       const msg = (iErr.message || "").toLowerCase();
       if (msg.includes("duplicate") || msg.includes("unique") || msg.includes("already exists")) {
-        await supabaseAdmin
-          .from("form_sessions")
-          .update({ used_at: new Date().toISOString() } as any)
-          .eq("sid", sid);
+        await supabaseAdmin.from("form_sessions").update({ used_at: new Date().toISOString() } as any).eq("sid", sid);
         return NextResponse.json({ ok: false, error: "already applied to this bounty" }, { status: 409 });
       }
       throw new Error(iErr.message);
@@ -290,6 +337,7 @@ export async function POST(req: Request) {
       .from("form_sessions")
       .update({ used_at: new Date().toISOString() } as any)
       .eq("sid", sid);
+
     if (uErr) throw new Error(uErr.message);
 
     return NextResponse.json({ ok: true, message: "✅ Bounty application submitted" });
